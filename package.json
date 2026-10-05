@@ -1,0 +1,38 @@
+{
+  "name": "fulldev",
+  "version": "0.1.0",
+  "description": "Edit your Fulldev website from the command line, through the Fulldev CMS MCP server.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fulldotdev/cli.git"
+  },
+  "type": "module",
+  "bin": {
+    "fulldev": "dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "check": "vp check && vp test",
+    "fix": "vp check --fix",
+    "test": "vp test"
+  },
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "typescript": "^6.0.3",
+    "vite-plus": "1.0.0"
+  },
+  "author": "Fulldev"
+}

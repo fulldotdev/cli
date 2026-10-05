@@ -1,0 +1,5 @@
+# Supply-chain protection on top of the pnpm defaults.
+minimumReleaseAgeStrict: true
+trustPolicy: no-downgrade
+trustPolicyIgnoreAfter: 10080
+ignorePnpmfile: true
