@@ -16,7 +16,7 @@
     "skills"
   ],
   "scripts": {
-    "build": "vp pack",
+    "build": "vp pack && chmod 644 dist/cli.mjs",
     "dev": "vp pack --watch",
     "check": "vp check && vp test && pnpm build && git diff --exit-code -- dist",
     "fix": "vp check --fix",
