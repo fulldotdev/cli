@@ -17,6 +17,8 @@ import type {
   StoredOAuthTokens,
 } from "@modelcontextprotocol/client"
 
+import { CliError } from "./errors.ts"
+
 /** What the CLI keeps for one product server, keyed by its MCP URL. */
 export interface Credentials {
   /** The authorization server that issued the tokens. */
@@ -28,6 +30,13 @@ export interface Credentials {
   email?: string
   /** When the tokens were saved, in milliseconds, to compute their expiry. */
   savedAt?: number
+}
+
+/** A stored record: the credentials and when they were written. */
+type Stored = Credentials & { writtenAt?: number }
+
+function withoutStamp({ writtenAt: _, ...credentials }: Stored): Credentials {
+  return credentials
 }
 
 export type Storage = "keychain" | "file"
@@ -174,21 +183,28 @@ export class CredentialStore {
   async read(
     serverUrl: string,
   ): Promise<{ credentials: Credentials; storage?: Storage }> {
+    let fromKeychain: Stored | undefined
     const keychain = await this.openKeychain()
     if (keychain) {
       try {
         const secret = await keychain.get(serverUrl)
-        if (secret)
-          return {
-            credentials: JSON.parse(secret) as Credentials,
-            storage: "keychain",
-          }
+        if (secret) fromKeychain = JSON.parse(secret) as Stored
       } catch (error) {
         this.disableKeychain(error)
       }
     }
-    const saved = (await this.readFile()).servers[serverUrl]
-    return saved ? { credentials: saved, storage: "file" } : { credentials: {} }
+    const fromFile = (await this.readFile()).servers[serverUrl] as
+      | Stored
+      | undefined
+    // After a fallback both can exist; the one written last is current.
+    if (
+      fromKeychain &&
+      (!fromFile || (fromKeychain.writtenAt ?? 0) >= (fromFile.writtenAt ?? 0))
+    )
+      return { credentials: withoutStamp(fromKeychain), storage: "keychain" }
+    return fromFile
+      ? { credentials: withoutStamp(fromFile), storage: "file" }
+      : { credentials: {} }
   }
 
   async get(serverUrl: string) {
@@ -204,7 +220,8 @@ export class CredentialStore {
     })
   }
 
-  private async write(serverUrl: string, credentials: Credentials) {
+  private async write(serverUrl: string, record: Credentials) {
+    const credentials: Stored = { ...record, writtenAt: Date.now() }
     const keychain = await this.openKeychain()
     if (keychain) {
       try {
@@ -215,6 +232,9 @@ export class CredentialStore {
         return
       } catch (error) {
         this.disableKeychain(error)
+        // An older keychain entry must not outlive this one; if it cannot be
+        // removed, the newer file record still wins on read.
+        await keychain.delete(serverUrl).catch(() => {})
       }
     }
     await this.changeFile((servers) => {
@@ -223,14 +243,23 @@ export class CredentialStore {
   }
 
   private async delete(serverUrl: string) {
-    const keychain = await this.openKeychain()
-    if (keychain)
-      await keychain.delete(serverUrl).catch((error: unknown) => {
-        this.disableKeychain(error)
-      })
     await this.changeFile((servers) => {
       delete servers[serverUrl]
     })
+    const keychain = await this.openKeychain()
+    if (!keychain) return
+    try {
+      await keychain.delete(serverUrl)
+    } catch (error) {
+      // A sign-out that leaves tokens in the keychain must not report success.
+      const stillThere = await keychain.get(serverUrl).catch(() => undefined)
+      if (stillThere)
+        throw new CliError(
+          "KEYCHAIN_ERROR",
+          `The sign-in could not be removed from the OS keychain: ${(error as Error).message}. Remove the entry for ${serverUrl} under the service fulldev, or run this command in a terminal on this computer.`,
+        )
+      this.disableKeychain(error)
+    }
   }
 
   private async readFile(): Promise<CredentialsFile> {

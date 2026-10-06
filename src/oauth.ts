@@ -498,8 +498,8 @@ export interface RevokeResult {
 }
 
 /**
- * Revokes the refresh token, then the access token (RFC 7009), sending the
- * client_id as a public client. Never throws: the result says what failed.
+ * Revokes the refresh token (RFC 7009), sending the client_id as a public
+ * client. Never throws: the result says what failed.
  */
 export async function revokeTokens(
   target: Target,

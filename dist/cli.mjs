@@ -9,7 +9,103 @@ import { text } from "node:stream/consumers";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+//#region src/errors.ts
+const exitCodes = {
+	ok: 0,
+	error: 1,
+	timeout: 2,
+	signIn: 3,
+	usage: 64
+};
+/** An error the CLI reports as {"error":{"code","message",...}} with an exit code. */
+var CliError = class extends Error {
+	code;
+	exitCode;
+	details;
+	constructor(code, message, exitCode = exitCodes.error, details = {}) {
+		super(message);
+		this.code = code;
+		this.exitCode = exitCode;
+		this.details = details;
+		this.name = "CliError";
+	}
+};
+/** A mistake in how the CLI was called. */
+var UsageError = class extends CliError {
+	constructor(message, help = "fulldev --help") {
+		super("USAGE", message, exitCodes.usage, { help });
+		this.name = "UsageError";
+	}
+};
+/** A command needs a sign-in that it may not start itself. */
+var SignInRequiredError = class extends CliError {
+	target;
+	constructor(target) {
+		const command = `fulldev login ${target.name}${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
+		super("SIGN_IN_REQUIRED", `Not signed in to ${target.title}. Run: ${command}`, exitCodes.signIn, {
+			product: target.name,
+			server: target.url,
+			command
+		});
+		this.target = target;
+		this.name = "SignInRequiredError";
+	}
+};
+function isSignInRequired(error) {
+	return findCause(error, SignInRequiredError) !== void 0;
+}
+/** The first error in the cause chain that is an instance of `type`. */
+function findCause(error, type) {
+	for (let cause = error; cause instanceof Error; cause = cause.cause) if (cause instanceof type) return cause;
+}
+/** Any error as the one JSON object the CLI prints on stderr, with its exit code. */
+function describeError(error) {
+	const cli = findCause(error, CliError);
+	if (cli) return {
+		body: { error: {
+			code: cli.code,
+			message: cli.message,
+			...cli.details
+		} },
+		exitCode: cli.exitCode
+	};
+	const message = error instanceof Error ? error.message : String(error);
+	if (error instanceof OAuthError) return {
+		body: { error: {
+			code: "OAUTH_ERROR",
+			message,
+			oauthError: error.code
+		} },
+		exitCode: exitCodes.error
+	};
+	if (error instanceof ProtocolError) return {
+		body: { error: {
+			code: "PROTOCOL_ERROR",
+			message,
+			protocolCode: error.code
+		} },
+		exitCode: exitCodes.error
+	};
+	if (error instanceof TypeError && /fetch failed/i.test(message)) return {
+		body: { error: {
+			code: "NETWORK_ERROR",
+			message: `${message}${error.cause instanceof Error ? `: ${error.cause.message}` : ""}`
+		} },
+		exitCode: exitCodes.error
+	};
+	return {
+		body: { error: {
+			code: "ERROR",
+			message
+		} },
+		exitCode: exitCodes.error
+	};
+}
+//#endregion
 //#region src/credentials.ts
+function withoutStamp({ writtenAt: _, ...credentials }) {
+	return credentials;
+}
 const keychainService = "fulldev";
 /** The OS keychain through @napi-rs/keyring; rejects when it cannot load. */
 async function openKeychain() {
@@ -114,19 +210,21 @@ var CredentialStore = class {
 	}
 	/** The server's credentials and where they were found. */
 	async read(serverUrl) {
+		let fromKeychain;
 		const keychain = await this.openKeychain();
 		if (keychain) try {
 			const secret = await keychain.get(serverUrl);
-			if (secret) return {
-				credentials: JSON.parse(secret),
-				storage: "keychain"
-			};
+			if (secret) fromKeychain = JSON.parse(secret);
 		} catch (error) {
 			this.disableKeychain(error);
 		}
-		const saved = (await this.readFile()).servers[serverUrl];
-		return saved ? {
-			credentials: saved,
+		const fromFile = (await this.readFile()).servers[serverUrl];
+		if (fromKeychain && (!fromFile || (fromKeychain.writtenAt ?? 0) >= (fromFile.writtenAt ?? 0))) return {
+			credentials: withoutStamp(fromKeychain),
+			storage: "keychain"
+		};
+		return fromFile ? {
+			credentials: withoutStamp(fromFile),
 			storage: "file"
 		} : { credentials: {} };
 	}
@@ -141,7 +239,11 @@ var CredentialStore = class {
 			else await this.write(serverUrl, next);
 		});
 	}
-	async write(serverUrl, credentials) {
+	async write(serverUrl, record) {
+		const credentials = {
+			...record,
+			writtenAt: Date.now()
+		};
 		const keychain = await this.openKeychain();
 		if (keychain) try {
 			await keychain.set(serverUrl, JSON.stringify(credentials));
@@ -151,19 +253,24 @@ var CredentialStore = class {
 			return;
 		} catch (error) {
 			this.disableKeychain(error);
+			await keychain.delete(serverUrl).catch(() => {});
 		}
 		await this.changeFile((servers) => {
 			servers[serverUrl] = credentials;
 		});
 	}
 	async delete(serverUrl) {
-		const keychain = await this.openKeychain();
-		if (keychain) await keychain.delete(serverUrl).catch((error) => {
-			this.disableKeychain(error);
-		});
 		await this.changeFile((servers) => {
 			delete servers[serverUrl];
 		});
+		const keychain = await this.openKeychain();
+		if (!keychain) return;
+		try {
+			await keychain.delete(serverUrl);
+		} catch (error) {
+			if (await keychain.get(serverUrl).catch(() => void 0)) throw new CliError("KEYCHAIN_ERROR", `The sign-in could not be removed from the OS keychain: ${error.message}. Remove the entry for ${serverUrl} under the service fulldev, or run this command in a terminal on this computer.`);
+			this.disableKeychain(error);
+		}
 	}
 	async readFile() {
 		try {
@@ -228,99 +335,6 @@ var CredentialStore = class {
 //#region package.json
 var version = "0.1.0";
 //#endregion
-//#region src/errors.ts
-const exitCodes = {
-	ok: 0,
-	error: 1,
-	timeout: 2,
-	signIn: 3,
-	usage: 64
-};
-/** An error the CLI reports as {"error":{"code","message",...}} with an exit code. */
-var CliError = class extends Error {
-	code;
-	exitCode;
-	details;
-	constructor(code, message, exitCode = exitCodes.error, details = {}) {
-		super(message);
-		this.code = code;
-		this.exitCode = exitCode;
-		this.details = details;
-		this.name = "CliError";
-	}
-};
-/** A mistake in how the CLI was called. */
-var UsageError = class extends CliError {
-	constructor(message, help = "fulldev --help") {
-		super("USAGE", message, exitCodes.usage, { help });
-		this.name = "UsageError";
-	}
-};
-/** A command needs a sign-in that it may not start itself. */
-var SignInRequiredError = class extends CliError {
-	target;
-	constructor(target) {
-		const command = `fulldev login ${target.name}${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
-		super("SIGN_IN_REQUIRED", `Not signed in to ${target.title}. Run: ${command}`, exitCodes.signIn, {
-			product: target.name,
-			server: target.url,
-			command
-		});
-		this.target = target;
-		this.name = "SignInRequiredError";
-	}
-};
-function isSignInRequired(error) {
-	return findCause(error, SignInRequiredError) !== void 0;
-}
-/** The first error in the cause chain that is an instance of `type`. */
-function findCause(error, type) {
-	for (let cause = error; cause instanceof Error; cause = cause.cause) if (cause instanceof type) return cause;
-}
-/** Any error as the one JSON object the CLI prints on stderr, with its exit code. */
-function describeError(error) {
-	const cli = findCause(error, CliError);
-	if (cli) return {
-		body: { error: {
-			code: cli.code,
-			message: cli.message,
-			...cli.details
-		} },
-		exitCode: cli.exitCode
-	};
-	const message = error instanceof Error ? error.message : String(error);
-	if (error instanceof OAuthError) return {
-		body: { error: {
-			code: "OAUTH_ERROR",
-			message,
-			oauthError: error.code
-		} },
-		exitCode: exitCodes.error
-	};
-	if (error instanceof ProtocolError) return {
-		body: { error: {
-			code: "PROTOCOL_ERROR",
-			message,
-			protocolCode: error.code
-		} },
-		exitCode: exitCodes.error
-	};
-	if (error instanceof TypeError && /fetch failed/i.test(message)) return {
-		body: { error: {
-			code: "NETWORK_ERROR",
-			message: `${message}${error.cause instanceof Error ? `: ${error.cause.message}` : ""}`
-		} },
-		exitCode: exitCodes.error
-	};
-	return {
-		body: { error: {
-			code: "ERROR",
-			message
-		} },
-		exitCode: exitCodes.error
-	};
-}
-//#endregion
 //#region src/products.ts
 const products = [
 	{
@@ -382,9 +396,10 @@ again to switch that product to another organization.`
 		usage: "fulldev logout [product...] [--url <mcp url>]",
 		summary: "Sign out and revoke the tokens (all products by default)",
 		options: ["url"],
-		details: `Revokes the product's refresh and access tokens at the authorization server
-and deletes them from this computer. When revoking fails, the local sign-out
-still happens and the result says so.`
+		details: `Revokes the product's refresh token at the authorization server and deletes
+the tokens from this computer. The access token cannot be revoked and expires
+within a day. When revoking fails, the local sign-out still happens and the
+result says so.`
 	},
 	status: {
 		usage: "fulldev status [product...] [--url <mcp url>]",
@@ -392,8 +407,9 @@ still happens and the result says so.`
 		options: ["url"],
 		details: `Prints, per product, whether you are signed in, whether the sign-in still
 works, your email, organization and when the access token expires, and where
-the tokens are stored. Exits with 3 when a listed product needs a sign-in,
-and with 1 when a server could not be reached to check it.`
+the tokens are stored. Exits with 3 when none of the listed products can be
+used, and with 1 when a server could not be reached to check it. Read each
+product's signedIn and valid to see which one needs fulldev login.`
 	},
 	help: {
 		usage: "fulldev help [command...]",
@@ -1117,8 +1133,8 @@ async function refreshTokens(target, store, fetchFn) {
 	await saveTokens(store, target, tokens, discovery.issuer);
 }
 /**
-* Revokes the refresh token, then the access token (RFC 7009), sending the
-* client_id as a public client. Never throws: the result says what failed.
+* Revokes the refresh token (RFC 7009), sending the client_id as a public
+* client. Never throws: the result says what failed.
 */
 async function revokeTokens(target, credentials, fetchFn = fetch) {
 	const { tokens } = credentials;

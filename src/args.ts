@@ -63,9 +63,10 @@ again to switch that product to another organization.`,
     usage: "fulldev logout [product...] [--url <mcp url>]",
     summary: "Sign out and revoke the tokens (all products by default)",
     options: ["url"],
-    details: `Revokes the product's refresh and access tokens at the authorization server
-and deletes them from this computer. When revoking fails, the local sign-out
-still happens and the result says so.`,
+    details: `Revokes the product's refresh token at the authorization server and deletes
+the tokens from this computer. The access token cannot be revoked and expires
+within a day. When revoking fails, the local sign-out still happens and the
+result says so.`,
   },
   status: {
     usage: "fulldev status [product...] [--url <mcp url>]",
@@ -73,8 +74,9 @@ still happens and the result says so.`,
     options: ["url"],
     details: `Prints, per product, whether you are signed in, whether the sign-in still
 works, your email, organization and when the access token expires, and where
-the tokens are stored. Exits with 3 when a listed product needs a sign-in,
-and with 1 when a server could not be reached to check it.`,
+the tokens are stored. Exits with 3 when none of the listed products can be
+used, and with 1 when a server could not be reached to check it. Read each
+product's signedIn and valid to see which one needs fulldev login.`,
   },
   help: {
     usage: "fulldev help [command...]",

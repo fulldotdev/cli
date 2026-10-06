@@ -42,6 +42,55 @@ const exists = (path: string) =>
   )
 
 describe("CredentialStore", () => {
+  it("prefers a newer file record over a stale keychain entry after a fallback", async () => {
+    const secrets = new Map<string, string>()
+    let failWrites = false
+    const keychain: Keychain = {
+      get: async (account) => secrets.get(account),
+      set: async (account, secret) => {
+        if (failWrites) throw new Error("User interaction is not allowed")
+        secrets.set(account, secret)
+      },
+      // A keychain that also cannot delete, as over SSH.
+      delete: async () => {
+        if (failWrites) throw new Error("User interaction is not allowed")
+      },
+    }
+    const dir = await directory()
+    await new CredentialStore(dir, async () => keychain).update(cms, () => ({
+      tokens,
+    }))
+    failWrites = true
+    const fresh = { ...tokens, access_token: "new" }
+    await new CredentialStore(dir, async () => keychain).update(cms, () => ({
+      tokens: fresh,
+    }))
+    failWrites = false
+    // The old keychain entry is still there, but the newer file record wins.
+    expect(secrets.has(cms)).toBe(true)
+    expect(
+      await new CredentialStore(dir, async () => keychain).read(cms),
+    ).toEqual({ credentials: { tokens: fresh }, storage: "file" })
+  })
+
+  it("does not report a sign-out while the tokens stay in the keychain", async () => {
+    const secrets = new Map<string, string>()
+    const keychain: Keychain = {
+      get: async (account) => secrets.get(account),
+      set: async (account, secret) => {
+        secrets.set(account, secret)
+      },
+      delete: async () => {
+        throw new Error("User interaction is not allowed")
+      },
+    }
+    const store = new CredentialStore(await directory(), async () => keychain)
+    await store.update(cms, () => ({ tokens }))
+    await expect(store.update(cms, () => ({}))).rejects.toMatchObject({
+      code: "KEYCHAIN_ERROR",
+    })
+  })
+
   it("lives in XDG_CONFIG_HOME or ~/.config", () => {
     expect(configDirectory({ XDG_CONFIG_HOME: "/x" })).toBe("/x/fulldev")
     expect(configDirectory({})).toMatch(/\.config\/fulldev$/)
@@ -84,7 +133,7 @@ describe("CredentialStore", () => {
     expect((await stat(store.directory)).mode & 0o777).toBe(0o700)
     expect(JSON.parse(await readFile(store.filePath, "utf8"))).toEqual({
       version: 2,
-      servers: { [cms]: { tokens } },
+      servers: { [cms]: { tokens, writtenAt: expect.any(Number) } },
     })
     await store.update(cms, () => ({}))
     expect(await exists(store.filePath)).toBe(false)

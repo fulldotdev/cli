@@ -50,10 +50,10 @@ The person signs in once per product with their Fulldev account and picks an org
 fulldev login cms          # opens the browser
 fulldev login              # every product, one after the other
 fulldev status             # per product: signed in, still valid, email, organization, expiry
-fulldev logout cms         # revokes the tokens and deletes them
+fulldev logout cms         # revokes the sign-in and deletes the tokens
 ```
 
-Tell the person a sign-in page opened, or give them the link and code from stderr. Login waits up to five minutes.
+Tell the person a sign-in page opened, or give them the link from stderr. Login waits up to five minutes.
 
 Without a terminal, as when you run commands, a product command never starts a sign-in: it exits with 3 at once. Then run the `fulldev login <product>` from the error and ask the person to finish it. The organization is chosen at sign-in; to switch organization, run `fulldev login <product>` again.
 
