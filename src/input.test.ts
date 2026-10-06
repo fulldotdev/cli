@@ -4,7 +4,7 @@ import { join } from "node:path"
 
 import { describe, expect, it } from "vite-plus/test"
 
-import { UsageError } from "./args.ts"
+import { UsageError } from "./errors.ts"
 import { readToolArguments } from "./input.ts"
 
 const noStdin = () => Promise.reject(new Error("stdin was read"))

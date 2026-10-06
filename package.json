@@ -1,7 +1,7 @@
 {
   "name": "fulldev",
   "version": "0.1.0",
-  "description": "Edit your Fulldev website from the command line, through the Fulldev CMS MCP server.",
+  "description": "Use Fulldev products, such as the CMS, Connect and Scan, from the command line through their MCP servers.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -29,7 +29,8 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "^2.3.0"
+    "@modelcontextprotocol/client": "^2.3.0",
+    "@napi-rs/keyring": "2.1.0"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
@@ -50,6 +51,8 @@
   "keywords": [
     "fulldev",
     "cms",
+    "connect",
+    "scan",
     "mcp",
     "cli",
     "agent-skills"
