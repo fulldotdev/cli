@@ -8,7 +8,7 @@ Run it straight from GitHub. It needs Node.js 24 or later.
 
 ```sh
 npx -y fulldev help
-pnpm dlx github:fulldotdev/cli help
+pnpm dlx fulldev help
 ```
 
 Or install it once:
