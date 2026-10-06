@@ -167,10 +167,12 @@ async function status(targets: Array<Target>, io: Io) {
       products: results,
     }),
   )
+  // Sign-in is needed when no listed product can be used; a product the
+  // person does not use does not make status fail.
   if (
-    results.some(
+    !results.some(
       (result) =>
-        !result.signedIn || ("valid" in result && result.valid === false),
+        result.signedIn && !("valid" in result && result.valid === false),
     )
   )
     return exitCodes.signIn
@@ -215,8 +217,12 @@ async function run(command: Command, io: Io): Promise<number> {
       return exitCodes.ok
   }
 
-  for (const url of await io.store.migrate()) {
-    const name = products.find((product) => product.url === url)?.name
+  for (const { url, credentials } of await io.store.migrate()) {
+    const product = products.find((candidate) => candidate.url === url)
+    const name = product?.name
+    // Best effort: the old tokens stop working at Clerk too.
+    if (product)
+      await revokeTokens({ ...product, urlFromFlag: false }, credentials)
     log(
       `fulldev now signs in per product and keeps tokens in the OS keychain. The sign-in from fulldev 0.1.0 for ${url} was removed; run fulldev login${name ? ` ${name}` : ""} to sign in again.`,
     )
@@ -225,12 +231,22 @@ async function run(command: Command, io: Io): Promise<number> {
   switch (command.kind) {
     case "login":
       for (const target of command.targets) {
+        // A new sign-in, such as one to switch organization, replaces the
+        // old one, so the old tokens are revoked once it succeeds.
+        const previous = await io.store.get(target.url)
         if (command.device) await deviceLogin(target, io.store, { log })
         else
           await browserLogin(target, io.store, {
             browser: command.browser,
             log,
           })
+        if (previous.tokens) {
+          const revocation = await revokeTokens(target, previous)
+          if (!revocation.revoked)
+            log(
+              `Could not revoke the previous sign-in to ${target.title}: ${revocation.error}`,
+            )
+        }
         log(`Signed in to ${target.title}.`)
       }
       return status(command.targets, io)

@@ -129,7 +129,12 @@ describe("CredentialStore", () => {
         },
       }),
     )
-    expect(await store.migrate()).toEqual([cms])
+    expect(await store.migrate()).toEqual([
+      {
+        url: cms,
+        credentials: { client: { client_id: "dcr" }, tokens, savedAt: 1 },
+      },
+    ])
     expect(await exists(store.legacyPath)).toBe(false)
     expect(await store.get(cms)).toEqual({})
     expect(await store.migrate()).toEqual([])

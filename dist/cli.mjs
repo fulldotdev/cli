@@ -202,7 +202,8 @@ var CredentialStore = class {
 	/**
 	* Removes the credentials file of fulldev 0.1.0 once. Its tokens belong to
 	* a dynamically registered client that the CLI no longer uses, so they are
-	* dropped. Returns the servers that were signed in, to ask for a new sign-in.
+	* dropped. Returns the servers that were signed in with their credentials,
+	* so their tokens can be revoked and a new sign-in asked for.
 	*/
 	async migrate() {
 		if (!await stat(this.legacyPath).catch(() => void 0)) return [];
@@ -216,7 +217,10 @@ var CredentialStore = class {
 			}
 			const servers = data && typeof data === "object" && "servers" in data ? data.servers : {};
 			await rm(this.legacyPath, { force: true });
-			return Object.entries(servers).filter(([, credentials]) => credentials.tokens).map(([url]) => url);
+			return Object.entries(servers).filter(([, credentials]) => credentials.tokens).map(([url, credentials]) => ({
+				url,
+				credentials
+			}));
 		});
 	}
 };
@@ -829,7 +833,7 @@ async function readToolArguments({ json, file, readStdin = () => text(process.st
 * server issuer. An issuer that is not listed, such as the Clerk development
 * instance behind a deploy preview, gets a dynamically registered client.
 */
-const clientIds = { "https://clerk.full.dev": "REPLACE_WITH_CLERK_CLIENT_ID" };
+const clientIds = { "https://clerk.full.dev": "3Gjxf97mGc2QVnTv" };
 const trimSlash = (url) => url.replace(/\/+$/, "");
 /** The pre-registered client for an issuer, if there is one. */
 function fixedClient(issuer) {
@@ -1222,7 +1226,7 @@ async function revokeTokens(target, credentials, fetchFn = fetch) {
 			revoked: false,
 			error: "The authorization server has no revocation endpoint."
 		};
-		const client = clientFor(metadata.issuer, credentials);
+		const client = credentials.client ?? fixedClient(metadata.issuer);
 		if (!client) return {
 			revoked: false,
 			error: "No OAuth client to revoke with."
@@ -1404,7 +1408,7 @@ async function status(targets, io) {
 		},
 		products: results
 	}));
-	if (results.some((result) => !result.signedIn || "valid" in result && result.valid === false)) return exitCodes.signIn;
+	if (!results.some((result) => result.signedIn && !("valid" in result && result.valid === false))) return exitCodes.signIn;
 	return results.some((result) => "error" in result) ? exitCodes.error : exitCodes.ok;
 }
 async function logout(targets, io) {
@@ -1441,18 +1445,28 @@ async function run(command, io) {
 			io.stdout(helpText(command.topic) ?? "");
 			return exitCodes.ok;
 	}
-	for (const url of await io.store.migrate()) {
-		const name = products.find((product) => product.url === url)?.name;
+	for (const { url, credentials } of await io.store.migrate()) {
+		const product = products.find((candidate) => candidate.url === url);
+		const name = product?.name;
+		if (product) await revokeTokens({
+			...product,
+			urlFromFlag: false
+		}, credentials);
 		log(`fulldev now signs in per product and keeps tokens in the OS keychain. The sign-in from fulldev 0.1.0 for ${url} was removed; run fulldev login${name ? ` ${name}` : ""} to sign in again.`);
 	}
 	switch (command.kind) {
 		case "login":
 			for (const target of command.targets) {
+				const previous = await io.store.get(target.url);
 				if (command.device) await deviceLogin(target, io.store, { log });
 				else await browserLogin(target, io.store, {
 					browser: command.browser,
 					log
 				});
+				if (previous.tokens) {
+					const revocation = await revokeTokens(target, previous);
+					if (!revocation.revoked) log(`Could not revoke the previous sign-in to ${target.title}: ${revocation.error}`);
+				}
 				log(`Signed in to ${target.title}.`);
 			}
 			return status(command.targets, io);

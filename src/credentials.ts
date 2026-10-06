@@ -270,9 +270,10 @@ export class CredentialStore {
   /**
    * Removes the credentials file of fulldev 0.1.0 once. Its tokens belong to
    * a dynamically registered client that the CLI no longer uses, so they are
-   * dropped. Returns the servers that were signed in, to ask for a new sign-in.
+   * dropped. Returns the servers that were signed in with their credentials,
+   * so their tokens can be revoked and a new sign-in asked for.
    */
-  async migrate(): Promise<Array<string>> {
+  async migrate(): Promise<Array<{ url: string; credentials: Credentials }>> {
     if (!(await stat(this.legacyPath).catch(() => undefined))) return []
     return this.locked(async () => {
       let data: unknown
@@ -290,7 +291,7 @@ export class CredentialStore {
       await rm(this.legacyPath, { force: true })
       return Object.entries(servers)
         .filter(([, credentials]) => credentials.tokens)
-        .map(([url]) => url)
+        .map(([url, credentials]) => ({ url, credentials }))
     })
   }
 }

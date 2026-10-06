@@ -36,7 +36,7 @@ import type { Target } from "./products.ts"
  * instance behind a deploy preview, gets a dynamically registered client.
  */
 export const clientIds: Record<string, string> = {
-  "https://clerk.full.dev": "REPLACE_WITH_CLERK_CLIENT_ID",
+  "https://clerk.full.dev": "3Gjxf97mGc2QVnTv",
 }
 
 const trimSlash = (url: string) => url.replace(/\/+$/, "")
@@ -682,7 +682,9 @@ export async function revokeTokens(
         revoked: false,
         error: "The authorization server has no revocation endpoint.",
       }
-    const client = clientFor(metadata.issuer, credentials)
+    // Tokens are revoked with the client they were issued to, which for a
+    // sign-in from fulldev 0.1.0 is its dynamically registered client.
+    const client = credentials.client ?? fixedClient(metadata.issuer)
     if (!client)
       return { revoked: false, error: "No OAuth client to revoke with." }
     const failures: Array<string> = []
