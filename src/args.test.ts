@@ -60,12 +60,11 @@ describe("parseCommandLine", () => {
     }
     expect(parseCommandLine(["login", "cms", "cms"], {})).toMatchObject({
       targets: [{ name: "cms" }],
-      device: false,
       browser: true,
     })
     expect(
-      parseCommandLine(["login", "connect", "--device", "--no-browser"], {}),
-    ).toMatchObject({ device: true, browser: false })
+      parseCommandLine(["login", "connect", "--no-browser"], {}),
+    ).toMatchObject({ browser: false })
   })
 
   it("turns off sign-in and the browser for product commands", () => {
@@ -127,7 +126,7 @@ describe("parseCommandLine", () => {
     [["cms", "tools", "--unknown"]],
     [["login", "nope"]],
     [["login", "--no-login"]],
-    [["logout", "--device"]],
+    [["login", "--device"]],
     [["login", "--url", "https://x.example/mcp"]],
     [["login", "cms", "connect", "--url", "https://x.example/mcp"]],
     [["cms", "tools", "--url", "not a url"]],
@@ -169,7 +168,7 @@ describe("helpText", () => {
     expect(text).toContain("Usage: fulldev cms call <tool>")
     expect(text).toContain("--file")
     expect(text).not.toContain("--timeout")
-    expect(helpText("login")).toContain("--device")
+    expect(helpText("login")).toContain("--no-browser")
   })
 
   it("never uses an em dash", () => {

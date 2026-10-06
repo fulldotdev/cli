@@ -113,7 +113,6 @@ async function saveTokens(
 /** Metadata fields the SDK's type leaves out (RFC 8414, RFC 8628). */
 type ServerMetadata = AuthorizationServerMetadata & {
   revocation_endpoint?: string
-  device_authorization_endpoint?: string
 }
 
 interface Discovery {
@@ -449,167 +448,6 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
 
 const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 
-function oauthFailure(
-  code: string,
-  what: string,
-  status: number,
-  body: Record<string, unknown>,
-) {
-  const error = text(body.error)
-  const description = text(body.error_description)
-  return new CliError(
-    code,
-    `${what} failed: ${[error ?? `HTTP ${status}`, description].filter(Boolean).join(": ")}`,
-    undefined,
-    { status, ...(error ? { oauthError: error } : {}) },
-  )
-}
-
-export interface DeviceAuthorization {
-  device_code: string
-  user_code: string
-  verification_uri: string
-  verification_uri_complete?: string
-  expires_in: number
-  interval?: number
-}
-
-export interface DevicePollOptions {
-  tokenEndpoint: string
-  clientId: string
-  resource: string
-  authorization: DeviceAuthorization
-  fetchFn?: FetchLike
-  sleep?: (ms: number) => Promise<void>
-  now?: () => number
-}
-
-/**
- * Polls the token endpoint for a device code (RFC 8628 section 3.4 and 3.5):
- * waits `interval` seconds between requests, adds 5 seconds on slow_down,
- * backs off on network errors, and stops on denial or expiry.
- */
-export async function pollDeviceToken({
-  tokenEndpoint,
-  clientId,
-  resource,
-  authorization,
-  fetchFn = fetch,
-  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  now = Date.now,
-}: DevicePollOptions): Promise<OAuthTokens> {
-  let intervalMs = (authorization.interval ?? 5) * 1000
-  const deadline = now() + authorization.expires_in * 1000
-  while (now() < deadline) {
-    await sleep(intervalMs)
-    let response: Response
-    try {
-      response = await fetchFn(tokenEndpoint, {
-        method: "POST",
-        headers: formHeaders,
-        body: new URLSearchParams({
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: authorization.device_code,
-          client_id: clientId,
-          resource,
-        }),
-      })
-    } catch {
-      intervalMs = Math.min(intervalMs * 2, 60_000)
-      continue
-    }
-    const body = await readJson(response)
-    if (response.ok && typeof body.access_token === "string")
-      return body as unknown as OAuthTokens
-    switch (body.error) {
-      case "authorization_pending":
-        continue
-      case "slow_down":
-        intervalMs += 5000
-        continue
-      case "access_denied":
-        throw new CliError("ACCESS_DENIED", "The sign-in was denied.")
-      case "expired_token":
-        throw new CliError(
-          "DEVICE_CODE_EXPIRED",
-          "The code expired before the sign-in was confirmed. Run the login again.",
-        )
-      default:
-        throw oauthFailure("SIGN_IN_FAILED", "Sign-in", response.status, body)
-    }
-  }
-  throw new CliError(
-    "DEVICE_CODE_EXPIRED",
-    "The code expired before the sign-in was confirmed. Run the login again.",
-  )
-}
-
-export interface DeviceLoginOptions {
-  log: (line: string) => void
-  fetchFn?: FetchLike
-  sleep?: (ms: number) => Promise<void>
-  now?: () => number
-}
-
-/** Signs in with the OAuth device authorization grant (RFC 8628). */
-export async function deviceLogin(
-  target: Target,
-  store: CredentialStore,
-  { log, fetchFn = fetch, sleep, now }: DeviceLoginOptions,
-) {
-  const discovery = await discover(target, fetchFn)
-  const endpoint = discovery.metadata.device_authorization_endpoint
-  if (typeof endpoint !== "string")
-    throw new CliError(
-      "DEVICE_UNSUPPORTED",
-      `The authorization server of ${target.title} does not offer device sign-in. Run fulldev login ${target.name} without --device.`,
-    )
-  const client = fixedClient(discovery.issuer)
-  if (!client)
-    throw new CliError(
-      "DEVICE_UNSUPPORTED",
-      `Device sign-in needs the Fulldev CLI client, which ${discovery.issuer} does not have. Run fulldev login ${target.name} without --device.`,
-    )
-  const response = await fetchFn(endpoint, {
-    method: "POST",
-    headers: formHeaders,
-    body: new URLSearchParams({
-      client_id: client.client_id,
-      scope: scopeFor(discovery),
-      resource: discovery.resource,
-    }),
-  })
-  const body = await readJson(response)
-  if (
-    !response.ok ||
-    typeof body.device_code !== "string" ||
-    typeof body.user_code !== "string" ||
-    typeof body.verification_uri !== "string"
-  )
-    throw oauthFailure(
-      "SIGN_IN_FAILED",
-      "Device authorization",
-      response.status,
-      body,
-    )
-  const authorization = body as unknown as DeviceAuthorization
-  log(`Sign in to ${target.title}: open ${authorization.verification_uri}`)
-  log(`and enter the code ${authorization.user_code}`)
-  if (authorization.verification_uri_complete)
-    log(`Or open ${authorization.verification_uri_complete}`)
-  log("Waiting for you to confirm the sign-in.")
-  const tokens = await pollDeviceToken({
-    tokenEndpoint: discovery.metadata.token_endpoint,
-    clientId: client.client_id,
-    resource: discovery.resource,
-    authorization,
-    fetchFn,
-    ...(sleep ? { sleep } : {}),
-    ...(now ? { now } : {}),
-  })
-  await saveTokens(store, target, tokens, discovery.issuer)
-}
-
 /**
  * Refreshes the target's tokens. Call it while holding the store's lock.
  * A refresh token the server no longer accepts is dropped, and the command
@@ -688,9 +526,10 @@ export async function revokeTokens(
     if (!client)
       return { revoked: false, error: "No OAuth client to revoke with." }
     const failures: Array<string> = []
+    // Only the refresh token: Clerk's access tokens are JWTs that cannot be
+    // revoked and expire within a day.
     for (const [token, hint] of [
       [tokens.refresh_token, "refresh_token"],
-      [tokens.access_token, "access_token"],
     ] as const) {
       if (!token) continue
       const body = new URLSearchParams({

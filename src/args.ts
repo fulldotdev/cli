@@ -12,7 +12,7 @@ import type { Product, Target } from "./products.ts"
 export type Command =
   | { kind: "help"; topic: string }
   | { kind: "version" }
-  | { kind: "login"; targets: Array<Target>; device: boolean; browser: boolean }
+  | { kind: "login"; targets: Array<Target>; browser: boolean }
   | { kind: "logout"; targets: Array<Target> }
   | { kind: "status"; targets: Array<Target> }
   | { kind: "instructions"; target: Target; session: Session }
@@ -40,7 +40,7 @@ export interface Session {
   browser: boolean
 }
 
-type Option = "url" | "file" | "timeout" | "device" | "login" | "browser"
+type Option = "url" | "file" | "timeout" | "login" | "browser"
 
 interface Topic {
   usage: string
@@ -51,16 +51,13 @@ interface Topic {
 
 const rootCommands: Record<string, Topic> = {
   login: {
-    usage:
-      "fulldev login [product...] [--device] [--no-browser] [--url <mcp url>]",
+    usage: "fulldev login [product...] [--no-browser] [--url <mcp url>]",
     summary: "Sign in (all products by default)",
-    options: ["device", "browser", "url"],
+    options: ["browser", "url"],
     details: `Signs in to each product in turn in your browser, where you choose your
 organization. Each product gets its own tokens; the browser session is shared,
 so after the first product the others are quick. Run fulldev login <product>
-again to switch that product to another organization.
-
---device prints a link and a code instead, for a machine without a browser.`,
+again to switch that product to another organization.`,
   },
   logout: {
     usage: "fulldev logout [product...] [--url <mcp url>]",
@@ -124,7 +121,6 @@ const optionHelp: Record<Option, string> = {
   url: "--url <mcp url>      Use another server for the product, such as a deploy preview",
   file: "-f, --file <path>    Read the tool's JSON input from a file",
   timeout: "--timeout <minutes>  How long to wait (default 30)",
-  device: "--device             Sign in with a code on another device",
   login: "--no-login           Fail with exit code 3 instead of signing in",
   browser:
     "--no-browser         Print the sign-in link without opening a browser",
@@ -253,7 +249,6 @@ export function parseCommandLine(
         url: { type: "string" },
         file: { type: "string", short: "f" },
         timeout: { type: "string" },
-        device: { type: "boolean" },
         login: { type: "boolean" },
         browser: { type: "boolean" },
         help: { type: "boolean", short: "h" },
@@ -311,7 +306,6 @@ export function parseCommandLine(
       return {
         kind: "login",
         targets,
-        device: values.device ?? false,
         browser: values.browser ?? true,
       }
     return { kind: first, targets }

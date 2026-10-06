@@ -370,19 +370,13 @@ function resolveTarget(product, flagUrl, env) {
 //#region src/args.ts
 const rootCommands = {
 	login: {
-		usage: "fulldev login [product...] [--device] [--no-browser] [--url <mcp url>]",
+		usage: "fulldev login [product...] [--no-browser] [--url <mcp url>]",
 		summary: "Sign in (all products by default)",
-		options: [
-			"device",
-			"browser",
-			"url"
-		],
+		options: ["browser", "url"],
 		details: `Signs in to each product in turn in your browser, where you choose your
 organization. Each product gets its own tokens; the browser session is shared,
 so after the first product the others are quick. Run fulldev login <product>
-again to switch that product to another organization.
-
---device prints a link and a code instead, for a machine without a browser.`
+again to switch that product to another organization.`
 	},
 	logout: {
 		usage: "fulldev logout [product...] [--url <mcp url>]",
@@ -460,7 +454,6 @@ const optionHelp = {
 	url: "--url <mcp url>      Use another server for the product, such as a deploy preview",
 	file: "-f, --file <path>    Read the tool's JSON input from a file",
 	timeout: "--timeout <minutes>  How long to wait (default 30)",
-	device: "--device             Sign in with a code on another device",
 	login: "--no-login           Fail with exit code 3 instead of signing in",
 	browser: "--no-browser         Print the sign-in link without opening a browser"
 };
@@ -570,7 +563,6 @@ function parseCommandLine(argv, env = process.env) {
 					short: "f"
 				},
 				timeout: { type: "string" },
-				device: { type: "boolean" },
 				login: { type: "boolean" },
 				browser: { type: "boolean" },
 				help: {
@@ -622,7 +614,6 @@ function parseCommandLine(argv, env = process.env) {
 		if (first === "login") return {
 			kind: "login",
 			targets,
-			device: values.device ?? false,
 			browser: values.browser ?? true
 		};
 		return {
@@ -904,12 +895,6 @@ async function discover(target, fetchFn) {
 		resourceMetadata: info.resourceMetadata
 	};
 }
-/** The scopes the resource asks for, plus offline_access for a refresh token. */
-function scopeFor({ resourceMetadata, metadata }) {
-	const scopes = new Set(resourceMetadata.scopes_supported ?? []);
-	if (metadata.scopes_supported?.includes("offline_access")) scopes.add("offline_access");
-	return [...scopes].join(" ");
-}
 const callbackPath = "/callback";
 /** The redirect URIs a dynamically registered client was registered with. */
 function redirectUris(client) {
@@ -1101,87 +1086,6 @@ async function readJson(response) {
 	}
 }
 const text$1 = (value) => typeof value === "string" ? value : void 0;
-function oauthFailure(code, what, status, body) {
-	const error = text$1(body.error);
-	const description = text$1(body.error_description);
-	return new CliError(code, `${what} failed: ${[error ?? `HTTP ${status}`, description].filter(Boolean).join(": ")}`, void 0, {
-		status,
-		...error ? { oauthError: error } : {}
-	});
-}
-/**
-* Polls the token endpoint for a device code (RFC 8628 section 3.4 and 3.5):
-* waits `interval` seconds between requests, adds 5 seconds on slow_down,
-* backs off on network errors, and stops on denial or expiry.
-*/
-async function pollDeviceToken({ tokenEndpoint, clientId, resource, authorization, fetchFn = fetch, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now }) {
-	let intervalMs = (authorization.interval ?? 5) * 1e3;
-	const deadline = now() + authorization.expires_in * 1e3;
-	while (now() < deadline) {
-		await sleep(intervalMs);
-		let response;
-		try {
-			response = await fetchFn(tokenEndpoint, {
-				method: "POST",
-				headers: formHeaders,
-				body: new URLSearchParams({
-					grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-					device_code: authorization.device_code,
-					client_id: clientId,
-					resource
-				})
-			});
-		} catch {
-			intervalMs = Math.min(intervalMs * 2, 6e4);
-			continue;
-		}
-		const body = await readJson(response);
-		if (response.ok && typeof body.access_token === "string") return body;
-		switch (body.error) {
-			case "authorization_pending": continue;
-			case "slow_down":
-				intervalMs += 5e3;
-				continue;
-			case "access_denied": throw new CliError("ACCESS_DENIED", "The sign-in was denied.");
-			case "expired_token": throw new CliError("DEVICE_CODE_EXPIRED", "The code expired before the sign-in was confirmed. Run the login again.");
-			default: throw oauthFailure("SIGN_IN_FAILED", "Sign-in", response.status, body);
-		}
-	}
-	throw new CliError("DEVICE_CODE_EXPIRED", "The code expired before the sign-in was confirmed. Run the login again.");
-}
-/** Signs in with the OAuth device authorization grant (RFC 8628). */
-async function deviceLogin(target, store, { log, fetchFn = fetch, sleep, now }) {
-	const discovery = await discover(target, fetchFn);
-	const endpoint = discovery.metadata.device_authorization_endpoint;
-	if (typeof endpoint !== "string") throw new CliError("DEVICE_UNSUPPORTED", `The authorization server of ${target.title} does not offer device sign-in. Run fulldev login ${target.name} without --device.`);
-	const client = fixedClient(discovery.issuer);
-	if (!client) throw new CliError("DEVICE_UNSUPPORTED", `Device sign-in needs the Fulldev CLI client, which ${discovery.issuer} does not have. Run fulldev login ${target.name} without --device.`);
-	const response = await fetchFn(endpoint, {
-		method: "POST",
-		headers: formHeaders,
-		body: new URLSearchParams({
-			client_id: client.client_id,
-			scope: scopeFor(discovery),
-			resource: discovery.resource
-		})
-	});
-	const body = await readJson(response);
-	if (!response.ok || typeof body.device_code !== "string" || typeof body.user_code !== "string" || typeof body.verification_uri !== "string") throw oauthFailure("SIGN_IN_FAILED", "Device authorization", response.status, body);
-	const authorization = body;
-	log(`Sign in to ${target.title}: open ${authorization.verification_uri}`);
-	log(`and enter the code ${authorization.user_code}`);
-	if (authorization.verification_uri_complete) log(`Or open ${authorization.verification_uri_complete}`);
-	log("Waiting for you to confirm the sign-in.");
-	await saveTokens(store, target, await pollDeviceToken({
-		tokenEndpoint: discovery.metadata.token_endpoint,
-		clientId: client.client_id,
-		resource: discovery.resource,
-		authorization,
-		fetchFn,
-		...sleep ? { sleep } : {},
-		...now ? { now } : {}
-	}), discovery.issuer);
-}
 /**
 * Refreshes the target's tokens. Call it while holding the store's lock.
 * A refresh token the server no longer accepts is dropped, and the command
@@ -1232,7 +1136,7 @@ async function revokeTokens(target, credentials, fetchFn = fetch) {
 			error: "No OAuth client to revoke with."
 		};
 		const failures = [];
-		for (const [token, hint] of [[tokens.refresh_token, "refresh_token"], [tokens.access_token, "access_token"]]) {
+		for (const [token, hint] of [[tokens.refresh_token, "refresh_token"]]) {
 			if (!token) continue;
 			const body = new URLSearchParams({
 				token,
@@ -1458,8 +1362,7 @@ async function run(command, io) {
 		case "login":
 			for (const target of command.targets) {
 				const previous = await io.store.get(target.url);
-				if (command.device) await deviceLogin(target, io.store, { log });
-				else await browserLogin(target, io.store, {
+				await browserLogin(target, io.store, {
 					browser: command.browser,
 					log
 				});

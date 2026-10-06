@@ -49,7 +49,6 @@ The person signs in once per product with their Fulldev account and picks an org
 ```sh
 fulldev login cms          # opens the browser
 fulldev login              # every product, one after the other
-fulldev login cms --device # no browser here: prints a link and a code to open on another device
 fulldev status             # per product: signed in, still valid, email, organization, expiry
 fulldev logout cms         # revokes the tokens and deletes them
 ```

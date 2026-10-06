@@ -7,13 +7,11 @@ import { describe, expect, it, vi } from "vite-plus/test"
 
 import { CredentialStore } from "./credentials.ts"
 import type { Keychain } from "./credentials.ts"
-import { CliError, SignInRequiredError } from "./errors.ts"
+import { SignInRequiredError } from "./errors.ts"
 import {
   StoredTokenAuth,
   browserLogin,
   clientIds,
-  deviceLogin,
-  pollDeviceToken,
   refreshTokens,
   revokeTokens,
 } from "./oauth.ts"
@@ -212,156 +210,8 @@ describe("browserLogin", () => {
   })
 })
 
-describe("deviceLogin", () => {
-  it("asks for a device code with the fixed client and the product as resource", async () => {
-    const store = await memoryStore()
-    const lines: Array<string> = []
-    const { fetchFn, requests } = authServer({
-      "/oauth/device_authorization": () =>
-        json({
-          device_code: "device-1",
-          user_code: "BCDF-GHJK",
-          verification_uri: "https://accounts.full.dev/device",
-          expires_in: 600,
-          interval: 5,
-        }),
-      "/oauth/token": () =>
-        json({
-          access_token: "access-1",
-          token_type: "Bearer",
-          refresh_token: "r",
-        }),
-    })
-    await deviceLogin(cms, store, {
-      log: (line) => lines.push(line),
-      fetchFn,
-      sleep: async () => {},
-    })
-    const device = requests.find((request) =>
-      request.url.endsWith("/oauth/device_authorization"),
-    )!
-    expect(Object.fromEntries(device.form)).toEqual({
-      client_id: clientId,
-      scope: "openid email offline_access user:org:read",
-      resource: "https://cms.full.dev/mcp",
-    })
-    expect(lines.join("\n")).toContain("https://accounts.full.dev/device")
-    expect(lines.join("\n")).toContain("BCDF-GHJK")
-    expect(lines.join("\n")).not.toContain("device-1")
-    expect((await store.get(cms.url)).tokens?.access_token).toBe("access-1")
-  })
-
-  it("reports what the server answers when it rejects the client", async () => {
-    const store = await memoryStore()
-    const { fetchFn } = authServer({
-      "/oauth/device_authorization": () =>
-        json(
-          { error: "invalid_client", error_description: "Unknown client." },
-          401,
-        ),
-    })
-    const login = deviceLogin(cms, store, { log: () => {}, fetchFn })
-    await expect(login).rejects.toThrow(CliError)
-    await expect(login).rejects.toMatchObject({
-      details: { oauthError: "invalid_client", status: 401 },
-    })
-  })
-})
-
-describe("pollDeviceToken", () => {
-  it("waits the interval, slows down on slow_down and returns the tokens", async () => {
-    const answers = [
-      json({ error: "authorization_pending" }, 400),
-      json({ error: "slow_down" }, 400),
-      json({ error: "authorization_pending" }, 400),
-      new TypeError("fetch failed"),
-      json({ access_token: "a", token_type: "Bearer" }),
-    ]
-    const bodies: Array<URLSearchParams> = []
-    const fetchFn = vi.fn<FetchLike>(async (_url, init) => {
-      bodies.push(init?.body as URLSearchParams)
-      const next = answers.shift()!
-      if (next instanceof Error) throw next
-      return next
-    })
-    const waits: Array<number> = []
-    let time = 0
-    const tokens = await pollDeviceToken({
-      tokenEndpoint: `${issuer}/oauth/token`,
-      clientId,
-      resource: cms.url,
-      authorization: {
-        device_code: "d",
-        user_code: "u",
-        verification_uri: "v",
-        expires_in: 600,
-        interval: 5,
-      },
-      fetchFn,
-      now: () => time,
-      sleep: async (ms) => {
-        waits.push(ms)
-        time += ms
-      },
-    })
-    expect(tokens.access_token).toBe("a")
-    expect(waits).toEqual([5000, 5000, 10_000, 10_000, 20_000])
-    expect(Object.fromEntries(bodies[0]!)).toEqual({
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      device_code: "d",
-      client_id: clientId,
-      resource: cms.url,
-    })
-  })
-
-  it.each([
-    ["access_denied", "ACCESS_DENIED"],
-    ["expired_token", "DEVICE_CODE_EXPIRED"],
-    ["invalid_grant", "SIGN_IN_FAILED"],
-  ])("stops on %s", async (error, code) => {
-    await expect(
-      pollDeviceToken({
-        tokenEndpoint: "t",
-        clientId,
-        resource: cms.url,
-        authorization: {
-          device_code: "d",
-          user_code: "u",
-          verification_uri: "v",
-          expires_in: 600,
-        },
-        fetchFn: async () => json({ error }, 400),
-        sleep: async () => {},
-      }),
-    ).rejects.toMatchObject({ code })
-  })
-
-  it("stops when the code expires", async () => {
-    let time = 0
-    await expect(
-      pollDeviceToken({
-        tokenEndpoint: "t",
-        clientId,
-        resource: cms.url,
-        authorization: {
-          device_code: "d",
-          user_code: "u",
-          verification_uri: "v",
-          expires_in: 12,
-          interval: 5,
-        },
-        fetchFn: async () => json({ error: "authorization_pending" }, 400),
-        now: () => time,
-        sleep: async (ms) => {
-          time += ms
-        },
-      }),
-    ).rejects.toMatchObject({ code: "DEVICE_CODE_EXPIRED" })
-  })
-})
-
 describe("revokeTokens", () => {
-  it("revokes the refresh token, then the access token, as a public client", async () => {
+  it("revokes the refresh token as a public client, and not the access token", async () => {
     const { fetchFn, requests } = authServer({
       "/oauth/token/revoke": () => new Response(null, { status: 200 }),
     })
@@ -381,7 +231,6 @@ describe("revokeTokens", () => {
       revocations.map((request) => Object.fromEntries(request.form)),
     ).toEqual([
       { token: "r", token_type_hint: "refresh_token", client_id: clientId },
-      { token: "a", token_type_hint: "access_token", client_id: clientId },
     ])
   })
 
@@ -408,7 +257,10 @@ describe("revokeTokens", () => {
 
     const offline = await revokeTokens(
       cms,
-      { issuer, tokens: { access_token: "a", token_type: "Bearer" } },
+      {
+        issuer,
+        tokens: { access_token: "a", token_type: "Bearer", refresh_token: "r" },
+      },
       async () => {
         throw new TypeError("fetch failed")
       },

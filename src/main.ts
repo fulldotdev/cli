@@ -23,7 +23,6 @@ import {
   StoredTokenAuth,
   browserLogin,
   claims,
-  deviceLogin,
   expiresAt,
   revokeTokens,
 } from "./oauth.ts"
@@ -234,12 +233,10 @@ async function run(command: Command, io: Io): Promise<number> {
         // A new sign-in, such as one to switch organization, replaces the
         // old one, so the old tokens are revoked once it succeeds.
         const previous = await io.store.get(target.url)
-        if (command.device) await deviceLogin(target, io.store, { log })
-        else
-          await browserLogin(target, io.store, {
-            browser: command.browser,
-            log,
-          })
+        await browserLogin(target, io.store, {
+          browser: command.browser,
+          log,
+        })
         if (previous.tokens) {
           const revocation = await revokeTokens(target, previous)
           if (!revocation.revoked)

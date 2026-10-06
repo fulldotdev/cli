@@ -35,21 +35,20 @@ npx skills add fulldotdev/cli
 ```sh
 fulldev login               # every product, one after the other
 fulldev login cms           # one product
-fulldev login cms --device  # on a machine without a browser
 fulldev status              # per product: signed in, valid, email, organization, expiry
 fulldev logout              # every product
 fulldev logout cms          # one product
 ```
 
-`fulldev login` opens your browser to sign in with your Fulldev account and choose your organization. Add `--no-browser` to only print the link. `--device` prints a link and a code instead: open the link on any device, enter the code, and the CLI continues when you confirm.
+`fulldev login` opens your browser to sign in with your Fulldev account and choose your organization. Add `--no-browser` to only print the link.
 
 There is one Fulldev account for all products, but each product gets its own tokens, which only that product accepts. The browser remembers your account, so signing in to the next product is quick. The organization is chosen at sign-in; to switch organization, run `fulldev login <product>` again.
 
-`fulldev logout` revokes the product's refresh and access tokens at the authorization server and deletes them from this computer. When revoking fails, for example offline, it still deletes them and says so.
+`fulldev logout` revokes the product's refresh token at the authorization server (access tokens cannot be revoked and expire within a day) and deletes them from this computer. When revoking fails, for example offline, it still deletes them and says so.
 
 How it works:
 
-- Browser sign-in uses OAuth with PKCE (S256) and a redirect to `http://127.0.0.1:<random port>/callback`. Device sign-in uses the OAuth device authorization grant. Both ask for the product's MCP URL as the resource, so the token is only valid for that product.
+- Browser sign-in uses OAuth with PKCE (S256) and a redirect to `http://127.0.0.1:<random port>/callback`. It asks for the product's MCP URL as the resource, so the token is only valid for that product.
 - The CLI is a pre-registered public OAuth client of [Clerk](https://clerk.full.dev). For another authorization server, such as the Clerk development instance behind a deploy preview, it registers a client itself the first time.
 - Tokens are stored in the OS keychain (macOS Keychain, Windows Credential Manager, or the Secret Service on Linux) under the service `fulldev`, one entry per product server. Where no keychain is available, such as in many containers and CI runners, they go to `~/.config/fulldev/auth.json` (or `$XDG_CONFIG_HOME/fulldev/auth.json`), readable only by you; `fulldev status` says which one is used.
 - Access tokens are refreshed when they expire. Parallel commands take turns through a lock file next to it, so they never refresh the same token twice.
