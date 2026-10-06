@@ -9,7 +9,7 @@ The `fulldev` CLI edits the person's website repository through the Fulldev CMS.
 
 ## Run
 
-Use `fulldev` when it is installed. Otherwise run every command as `npx -y github:fulldotdev/cli <command>`.
+Use `fulldev` when it is installed. Otherwise run every command as `npx -y fulldev <command>`.
 
 Results are JSON on stdout. Hints and errors go to stderr. Exit codes: 0 done, 1 error, 2 form wait timed out, 3 sign-in needed.
 
