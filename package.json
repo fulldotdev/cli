@@ -21,7 +21,7 @@
     "check": "vp check && vp test && pnpm build && git diff --exit-code -- dist",
     "fix": "vp check --fix",
     "test": "vp test",
-    "release": "changeset version && pnpm install --lockfile-only",
+    "release": "changeset version && pnpm install --lockfile-only && pnpm build",
     "release:publish": "pnpm build && git diff --exit-code -- dist && changeset publish"
   },
   "packageManager": "pnpm@12.8.1",
