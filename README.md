@@ -4,7 +4,7 @@ Edit your website through the [Fulldev CMS](https://cms.full.dev) from a termina
 
 ## Install
 
-Run it straight from GitHub. It needs Node.js 24 or later.
+Run it from npm. It needs Node.js 24 or later.
 
 ```sh
 npx -y fulldev help
