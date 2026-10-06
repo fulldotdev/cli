@@ -35,7 +35,9 @@ export interface Credentials {
 /** A stored record: the credentials and when they were written. */
 type Stored = Credentials & { writtenAt?: number }
 
-function withoutStamp({ writtenAt: _, ...credentials }: Stored): Credentials {
+function withoutStamp(stored: Stored): Credentials {
+  const credentials = { ...stored }
+  delete credentials.writtenAt
   return credentials
 }
 

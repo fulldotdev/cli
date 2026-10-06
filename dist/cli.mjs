@@ -103,7 +103,9 @@ function describeError(error) {
 }
 //#endregion
 //#region src/credentials.ts
-function withoutStamp({ writtenAt: _, ...credentials }) {
+function withoutStamp(stored) {
+	const credentials = { ...stored };
+	delete credentials.writtenAt;
 	return credentials;
 }
 const keychainService = "fulldev";
