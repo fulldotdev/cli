@@ -7,14 +7,14 @@ Edit your website through the [Fulldev CMS](https://cms.full.dev) from a termina
 Run it straight from GitHub. It needs Node.js 24 or later.
 
 ```sh
-npx -y github:fulldotdev/cli help
+npx -y fulldev help
 pnpm dlx github:fulldotdev/cli help
 ```
 
 Or install it once:
 
 ```sh
-npm install -g github:fulldotdev/cli
+npm install -g fulldev
 fulldev help
 ```
 
@@ -79,3 +79,7 @@ pnpm build   # writes dist/cli.mjs
 ## License
 
 [MIT](LICENSE)
+
+## Releases
+
+Every pull request that changes what users get adds a changeset with `pnpm changeset`. Merging to `main` opens a release pull request; merging that publishes the [`fulldev` package](https://www.npmjs.com/package/fulldev) to npm from GitHub Actions with trusted publishing and provenance, without an npm token. `dist/` stays committed, so `npx github:fulldotdev/cli` keeps working; `pnpm check` fails when it is out of date.

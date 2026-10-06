@@ -18,9 +18,11 @@
   "scripts": {
     "build": "vp pack",
     "dev": "vp pack --watch",
-    "check": "vp check && vp test",
+    "check": "vp check && vp test && pnpm build && git diff --exit-code -- dist",
     "fix": "vp check --fix",
-    "test": "vp test"
+    "test": "vp test",
+    "release": "changeset version && pnpm install --lockfile-only",
+    "release:publish": "pnpm build && git diff --exit-code -- dist && changeset publish"
   },
   "packageManager": "pnpm@12.8.1",
   "engines": {
@@ -30,9 +32,26 @@
     "@modelcontextprotocol/client": "^2.3.0"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.1",
     "@types/node": "^24.19.1",
     "typescript": "^6.0.3",
     "vite-plus": "1.0.0"
   },
-  "author": "Fulldev"
+  "author": "Fulldev",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/fulldotdev/cli#readme",
+  "bugs": {
+    "url": "https://github.com/fulldotdev/cli/issues"
+  },
+  "keywords": [
+    "fulldev",
+    "cms",
+    "mcp",
+    "cli",
+    "agent-skills"
+  ]
 }
