@@ -16,10 +16,27 @@ export function toolOutput(result: CallToolResult): unknown {
   return values.length === 1 ? values[0] : values
 }
 
-/** A failed tool result as an error object, also when the server sent plain text. */
-export function toolError(result: CallToolResult): unknown {
+/** A failed tool result as {"error":{"code","message",...}}, whatever the server sent. */
+export function toolError(result: CallToolResult): {
+  error: Record<string, unknown>
+} {
   const output = toolOutput(result)
-  return output !== null && typeof output === "object" && !Array.isArray(output)
-    ? output
-    : { error: { code: "TOOL_ERROR", message: output } }
+  if (output !== null && typeof output === "object" && !Array.isArray(output)) {
+    const { error } = output as { error?: unknown }
+    if (error !== null && typeof error === "object" && !Array.isArray(error))
+      return output as { error: Record<string, unknown> }
+    return {
+      error: {
+        code: "TOOL_ERROR",
+        message: "The tool failed.",
+        details: output,
+      },
+    }
+  }
+  return {
+    error: {
+      code: "TOOL_ERROR",
+      message: typeof output === "string" ? output : JSON.stringify(output),
+    },
+  }
 }

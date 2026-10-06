@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { text } from "node:stream/consumers"
 
-import { UsageError } from "./args.ts"
+import { UsageError } from "./errors.ts"
 
 export interface ToolInputSource {
   /** The JSON argument; "-" reads stdin. */

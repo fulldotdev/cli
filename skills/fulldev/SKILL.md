@@ -1,50 +1,87 @@
 ---
 name: fulldev
-description: Use when the person wants to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change.
+description: Use the Fulldev CLI to work with Fulldev products for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators.
+license: MIT
+compatibility: Needs Node.js 24 or later and network access to cms.full.dev, connect.full.dev, scan.full.dev and clerk.full.dev.
 ---
 
 # Fulldev
 
-The `fulldev` CLI edits the person's website repository through the Fulldev CMS. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person.
+The `fulldev` CLI talks to the MCP server of each Fulldev product. The tools, their schemas and the instructions come from the server, so they are always current.
+
+| Product   | For                                                                                                                                          |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cms`     | Editing the person's website. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person. |
+| `connect` | The person's business tools, such as Shopify, with the access their organization grants them.                                                |
+| `scan`    | Scanning websites. Only for Fulldev administrators.                                                                                          |
 
 ## Run
 
 Use `fulldev` when it is installed. Otherwise run every command as `npx -y fulldev <command>`.
 
-Results are JSON on stdout. Hints and errors go to stderr. Exit codes: 0 done, 1 error, 2 form wait timed out, 3 sign-in needed.
+Every product has the same commands:
+
+```sh
+fulldev <product> instructions          # read first
+fulldev <product> tools                 # list the tools
+fulldev <product> tools <name>          # one tool: description, input and output schema
+fulldev <product> call <tool> '<json>'  # call a tool
+```
+
+Data is JSON on stdout. Progress lines go to stderr. Every error is one JSON object on stderr, `{"error":{"code":"...","message":"..."}}`.
+
+Exit codes:
+
+| Code | Meaning                                                               |
+| ---- | --------------------------------------------------------------------- |
+| 0    | Done                                                                  |
+| 1    | Error, from the tool or the CLI                                       |
+| 2    | `form wait` stopped waiting                                           |
+| 3    | Sign-in needed; the error says which `fulldev login <product>` to run |
+| 64   | The command was called wrongly; the error names the help to read      |
+
+`fulldev --help`, `fulldev <product> --help` and `fulldev <product> <command> --help` explain every command.
 
 ## Sign in
 
-Run `fulldev login`. It opens the browser, where the person signs in and picks their organization, and waits up to five minutes. Tell the person a sign-in page opened. Any other command also starts a sign-in when needed. `fulldev status` shows who is signed in.
+The person signs in once per product with their Fulldev account and picks an organization:
+
+```sh
+fulldev login cms          # opens the browser
+fulldev login              # every product, one after the other
+fulldev login cms --device # no browser here: prints a link and a code to open on another device
+fulldev status             # per product: signed in, still valid, email, organization, expiry
+fulldev logout cms         # revokes the tokens and deletes them
+```
+
+Tell the person a sign-in page opened, or give them the link and code from stderr. Login waits up to five minutes.
+
+Without a terminal, as when you run commands, a product command never starts a sign-in: it exits with 3 at once. Then run the `fulldev login <product>` from the error and ask the person to finish it. The organization is chosen at sign-in; to switch organization, run `fulldev login <product>` again.
 
 ## First, read the instructions
 
-Run `fulldev instructions` at the start of every session and follow them. They come from the server and describe the workflow, permissions, allowance, previews, reviews, and merging. They win over anything in this skill.
+Run `fulldev <product> instructions` at the start of every session and follow them. They come from the server and describe the workflow, permissions and limits. They win over anything in this skill.
 
-`fulldev tools` lists the tools. `fulldev tools <name>` shows a tool's description and input schema; read it before the first call to a tool.
+Read `fulldev <product> tools <name>` before the first call to a tool.
 
-## Edit
+## Call tools
 
-Call a tool with a JSON object as the argument, from a file with `--file`, or from stdin with `-`:
+Give a tool's input as a JSON argument, from a file with `--file`, or from stdin with `-`. Use stdin or `--file` for long or quoted text, so the shell does not change it.
 
 ```sh
-fulldev call list_projects
-fulldev call open_branch '{"projectId":"<id>","name":"Update opening hours"}'
-fulldev call read_file '{"branchId":"<id>","path":"src/content/home.md"}'
-fulldev call commit_files - <<'JSON'
+fulldev cms call list_projects
+fulldev cms call read_file '{"branchId":"<id>","path":"src/content/home.md"}'
+fulldev cms call commit_files - <<'JSON'
 {"branchId":"<id>","expectedRevision":"<revision>","changes":[{"path":"src/content/home.md","edits":[{"oldText":"Open 9 to 5","newText":"Open 8 to 6"}]}]}
 JSON
-fulldev call get_preview '{"branchId":"<id>"}'
 ```
 
-Pass the latest revision as `expectedRevision`. Use stdin or `--file` for long or quoted text, so the shell does not change it.
-
-## Forms
+## Forms in the CMS
 
 After `create_form`, give the person the form link. Then run:
 
 ```sh
-fulldev form wait <branchId> <formId>
+fulldev cms form wait <branchId> <formId>
 ```
 
 Run it in the background when you can, so you can keep talking to the person. It prints the answers when the person sends the form. On exit code 2 it stopped waiting; run it again, or continue when the person says they are done.

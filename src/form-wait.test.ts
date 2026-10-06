@@ -3,7 +3,8 @@ import type { CallToolResult } from "@modelcontextprotocol/client"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 import { waitForForm } from "./form-wait.ts"
-import { LoginRequiredError } from "./oauth.ts"
+import { SignInRequiredError } from "./errors.ts"
+import { findProduct } from "./products.ts"
 
 const branchId = "11111111-1111-4111-8111-111111111111"
 const formId = "22222222-2222-4222-8222-222222222222"
@@ -50,7 +51,11 @@ describe("waitForForm", () => {
       result: answers,
     })
     expect(callTool).toHaveBeenCalledTimes(3)
-    expect(callTool).toHaveBeenCalledWith("wait_for_form", { branchId, formId })
+    expect(callTool).toHaveBeenCalledWith(
+      "wait_for_form",
+      { branchId, formId },
+      expect.any(AbortSignal),
+    )
     expect(progress).toHaveBeenCalledTimes(2)
   })
 
@@ -77,6 +82,38 @@ describe("waitForForm", () => {
       result: { waiting: true, branchId, formId },
     })
     expect(callTool).toHaveBeenCalledTimes(3)
+  })
+
+  it("aborts a request that is still running at the deadline", async () => {
+    let aborted = false
+    const callTool = vi.fn(
+      (_name: string, _args: Record<string, unknown>, signal: AbortSignal) =>
+        new Promise<CallToolResult>((_, reject) => {
+          signal.addEventListener("abort", () => {
+            aborted = true
+            reject(new Error("The operation was aborted"))
+          })
+        }),
+    )
+    const started = Date.now()
+    const outcome = await waitForForm(callTool, {
+      branchId,
+      formId,
+      timeoutMs: 50,
+      product: "cms",
+    })
+    expect(aborted).toBe(true)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(outcome).toMatchObject({
+      status: "timeout",
+      result: {
+        waiting: true,
+        message: expect.stringContaining(
+          `fulldev cms form wait ${branchId} ${formId}`,
+        ),
+      },
+    })
+    expect(callTool).toHaveBeenCalledTimes(1)
   })
 
   it("returns a tool error", async () => {
@@ -116,7 +153,10 @@ describe("waitForForm", () => {
   })
 
   it.each([
-    new LoginRequiredError("https://cms.full.dev/mcp"),
+    new SignInRequiredError({
+      ...findProduct("cms")!,
+      urlFromFlag: false,
+    }),
     new ProtocolError(-32602, "Tool wait_for_form not found"),
   ])("does not retry %s", async (error) => {
     const { callTool, options } = setup([error])
