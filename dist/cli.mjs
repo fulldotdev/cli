@@ -335,7 +335,7 @@ var CredentialStore = class {
 };
 //#endregion
 //#region package.json
-var version = "0.2.0";
+var version = "0.2.1";
 //#endregion
 //#region src/products.ts
 const products = [

@@ -1,6 +1,6 @@
 {
   "name": "fulldev",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Use Fulldev products, such as the CMS, Connect and Scan, from the command line through their MCP servers.",
   "license": "MIT",
   "repository": {

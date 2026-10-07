@@ -1,5 +1,11 @@
 # fulldev
 
+## 0.2.1
+
+### Patch Changes
+
+- [#6](https://github.com/fulldotdev/cli/pull/6) [`84519ee`](https://github.com/fulldotdev/cli/commit/84519eece137d4815fdc0f2a044ff0d9cbb2327d) Thanks [@silveltman](https://github.com/silveltman)! - Show the page after sign-in in the Fulldev colours, with the logo tile.
+
 ## 0.2.0
 
 ### Minor Changes
