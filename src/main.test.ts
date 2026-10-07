@@ -153,6 +153,7 @@ describe("main", () => {
         { product: "cms", signedIn: false },
         { product: "connect", signedIn: false },
         { product: "scan", signedIn: false },
+        { product: "sites", signedIn: false },
       ],
     })
   })

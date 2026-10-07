@@ -12,11 +12,12 @@ import {
 const cms = findProduct("cms")!
 
 describe("products", () => {
-  it("has cms, connect and scan with their MCP servers", () => {
+  it("has cms, connect, scan and sites with their MCP servers", () => {
     expect(products.map(({ name, url }) => [name, url])).toEqual([
       ["cms", "https://cms.full.dev/mcp"],
       ["connect", "https://connect.full.dev/mcp"],
       ["scan", "https://scan.full.dev/mcp"],
+      ["sites", "https://sites.full.dev/mcp"],
     ])
     for (const product of products) {
       expect(product.title).toMatch(/^Fulldev /)
@@ -55,6 +56,7 @@ describe("products", () => {
       "https://preview.example.com/mcp",
       "https://connect.full.dev/mcp",
       "https://scan.full.dev/mcp",
+      "https://sites.full.dev/mcp",
     ])
     expect(parseCommandLine(["connect", "tools"], env)).toMatchObject({
       target: { url: "https://connect.full.dev/mcp" },

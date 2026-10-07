@@ -32,6 +32,13 @@ export const products: Array<Product> = [
     url: "https://scan.full.dev/mcp",
     description: "Scan whole websites for problems. For administrators only.",
   },
+  {
+    name: "sites",
+    title: "Fulldev Sites",
+    url: "https://sites.full.dev/mcp",
+    description:
+      "Have Fulldev make a finished website from a brief and tested design options. For administrators only for now.",
+  },
 ]
 
 /** A product with the server URL this run uses. */
