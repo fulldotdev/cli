@@ -1,8 +1,8 @@
 ---
 name: fulldev
-description: Use the Fulldev CLI to work with Fulldev products for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators.
+description: Use the Fulldev CLI to work with Fulldev products for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now.
 license: MIT
-compatibility: Needs Node.js 24 or later and network access to cms.full.dev, connect.full.dev, scan.full.dev and clerk.full.dev.
+compatibility: Needs Node.js 24 or later and network access to cms.full.dev, connect.full.dev, scan.full.dev, sites.full.dev and clerk.full.dev.
 ---
 
 # Fulldev
@@ -14,6 +14,7 @@ The `fulldev` CLI talks to the MCP server of each Fulldev product. The tools, th
 | `cms`     | Editing the person's website. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person. |
 | `connect` | The person's business tools, such as Shopify, with the access their organization grants them.                                                |
 | `scan`    | Scanning websites. Only for Fulldev administrators.                                                                                          |
+| `sites`   | Making a new website with Fulldev Sites from a brief and design options. Only for Fulldev administrators for now.                            |
 
 ## Run
 

@@ -7,6 +7,7 @@ Use Fulldev products from a terminal or an AI agent. The CLI is a thin client of
 | `cms`     | `https://cms.full.dev/mcp`     | Editing your website through the [Fulldev CMS](https://cms.full.dev)                      |
 | `connect` | `https://connect.full.dev/mcp` | Your business tools, such as Shopify, through [Fulldev Connect](https://connect.full.dev) |
 | `scan`    | `https://scan.full.dev/mcp`    | Scanning websites with [Fulldev Scan](https://scan.full.dev), for administrators only     |
+| `sites`   | `https://sites.full.dev/mcp`   | A finished website from [Fulldev Sites](https://sites.full.dev), for administrators only  |
 
 ## Install
 
