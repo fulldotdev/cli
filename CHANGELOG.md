@@ -1,5 +1,11 @@
 # fulldev
 
+## 0.3.0
+
+### Minor Changes
+
+- [#8](https://github.com/fulldotdev/cli/pull/8) [`2da0656`](https://github.com/fulldotdev/cli/commit/2da065689653edac1b0faf99deea2080e8f0587f) Thanks [@silveltman](https://github.com/silveltman)! - Add Fulldev Sites as the product `sites`, at `https://sites.full.dev/mcp`: have Fulldev make a finished website from a brief and tested design options. For administrators only for now.
+
 ## 0.2.1
 
 ### Patch Changes
