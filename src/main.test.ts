@@ -6,7 +6,8 @@ import { describe, expect, it } from "vite-plus/test"
 
 import { CredentialStore } from "./credentials.ts"
 import type { Keychain } from "./credentials.ts"
-import { main } from "./main.ts"
+import { findApp } from "./apps.ts"
+import { instructionsFor, main } from "./main.ts"
 import type { Io } from "./main.ts"
 
 async function run(
@@ -48,6 +49,7 @@ async function run(
 
 describe("main", () => {
   it.each([
+    [["tools"]],
     [["cms", "tools"]],
     [["connect", "instructions"]],
     [["scan", "call", "list_sites", "{}"]],
@@ -58,32 +60,30 @@ describe("main", () => {
       const { code, stdout, stderr } = await run(argv)
       expect(code).toBe(3)
       expect(stdout).toBe("")
-      const product = argv[0]
       expect(JSON.parse(stderr)).toEqual({
         error: {
           code: "SIGN_IN_REQUIRED",
-          message: expect.stringContaining(`fulldev login ${product}`),
-          product,
-          server: `https://${product}.full.dev/mcp`,
-          command: `fulldev login ${product}`,
+          message: "Not signed in to Fulldev. Run: fulldev login",
+          server: "https://app.full.dev/mcp",
+          command: "fulldev login",
         },
       })
     },
   )
 
   it("names the --url in the login command it asks for", async () => {
-    const preview = "https://deploy-preview-3--cms.netlify.app/mcp"
+    const preview = "https://deploy-preview-3--fulldev-app.netlify.app/mcp"
     const { code, stderr } = await run(["cms", "tools", "--url", preview])
     expect(code).toBe(3)
     expect(JSON.parse(stderr).error.command).toBe(
-      `fulldev login cms --url ${preview}`,
+      `fulldev login --url ${preview}`,
     )
     const fromEnv = await run(["cms", "tools"], {
-      env: { FULLDEV_CMS_URL: preview },
+      env: { FULLDEV_URL: preview },
     })
     expect(JSON.parse(fromEnv.stderr).error).toMatchObject({
       server: preview,
-      command: "fulldev login cms",
+      command: "fulldev login",
     })
   })
 
@@ -145,27 +145,44 @@ describe("main", () => {
     expect(stdout).toMatch(/^\d+\.\d+\.\d+\n$/)
   })
 
-  it("logs out of products that are not signed in", async () => {
+  it("logs out when not signed in", async () => {
     const { code, stdout } = await run(["logout"])
     expect(code).toBe(0)
     expect(JSON.parse(stdout)).toEqual({
-      products: [
-        { product: "cms", signedIn: false },
-        { product: "connect", signedIn: false },
-        { product: "scan", signedIn: false },
-        { product: "sites", signedIn: false },
-      ],
+      server: "https://app.full.dev/mcp",
+      signedIn: false,
     })
   })
 
-  it("reports status per product and exits 3 when one needs a sign-in", async () => {
-    const { code, stdout } = await run(["status", "cms"])
+  it("reports the status and exits 3 when a sign-in is needed", async () => {
+    const { code, stdout } = await run(["status"])
     expect(code).toBe(3)
     expect(JSON.parse(stdout)).toEqual({
+      server: "https://app.full.dev/mcp",
+      signedIn: false,
       storage: { kind: "keychain", service: "fulldev" },
-      products: [
-        { product: "cms", server: "https://cms.full.dev/mcp", signedIn: false },
-      ],
     })
+  })
+})
+
+describe("instructionsFor", () => {
+  const text = `This is Fulldev: the overview.
+
+## Fulldev CMS (cms_)
+Use the CMS.
+
+## Fulldev Scan (scan_)
+Use Scan.`
+
+  it("gives the overview and the app's own part", () => {
+    expect(instructionsFor(text, findApp("scan")!)).toBe(
+      "This is Fulldev: the overview.\n\n## Fulldev Scan (scan_)\nUse Scan.",
+    )
+  })
+
+  it("says so when the app is not among the person's", () => {
+    expect(() => instructionsFor(text, findApp("pages")!)).toThrow(
+      /Fulldev Pages is not among your apps/,
+    )
   })
 })

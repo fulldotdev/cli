@@ -9,6 +9,7 @@ import { text } from "node:stream/consumers";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { createInterface } from "node:readline";
 //#region src/errors.ts
 const exitCodes = {
 	ok: 0,
@@ -41,9 +42,8 @@ var UsageError = class extends CliError {
 var SignInRequiredError = class extends CliError {
 	target;
 	constructor(target) {
-		const command = `fulldev login ${target.name}${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
+		const command = `fulldev login${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
 		super("SIGN_IN_REQUIRED", `Not signed in to ${target.title}. Run: ${command}`, exitCodes.signIn, {
-			product: target.name,
 			server: target.url,
 			command
 		});
@@ -172,7 +172,7 @@ async function withLock(path, action, { timeoutMs = 6e4, staleMs = 12e4 } = {}) 
 }
 const isEmpty = (credentials) => Object.keys(credentials).length === 0;
 /**
-* Keeps credentials per product server in the OS keychain (service "fulldev",
+* Keeps credentials per app server in the OS keychain (service "fulldev",
 * account = the MCP URL). When the keychain is unavailable or rejects a write,
 * it uses a JSON file readable only by this user instead.
 */
@@ -181,8 +181,6 @@ var CredentialStore = class {
 	loadKeychain;
 	filePath;
 	lockPath;
-	/** The 0.1.0 file, removed once by migrate(). */
-	legacyPath;
 	/** Why the keychain is not used, once it failed. */
 	keychainError;
 	keychain;
@@ -191,7 +189,6 @@ var CredentialStore = class {
 		this.loadKeychain = loadKeychain;
 		this.filePath = join(directory, "auth.json");
 		this.lockPath = join(directory, "auth.lock");
-		this.legacyPath = join(directory, "credentials.json");
 	}
 	/** Where new credentials go. */
 	async storage() {
@@ -308,82 +305,74 @@ var CredentialStore = class {
 		await chmod(temporary, 384);
 		await rename(temporary, this.filePath);
 	}
-	/**
-	* Removes the credentials file of fulldev 0.1.0 once. Its tokens belong to
-	* a dynamically registered client that the CLI no longer uses, so they are
-	* dropped. Returns the servers that were signed in with their credentials,
-	* so their tokens can be revoked and a new sign-in asked for.
-	*/
-	async migrate() {
-		if (!await stat(this.legacyPath).catch(() => void 0)) return [];
-		return this.locked(async () => {
-			let data;
-			try {
-				data = JSON.parse(await readFile(this.legacyPath, "utf8"));
-			} catch (error) {
-				if (error.code === "ENOENT") return [];
-				if (!(error instanceof SyntaxError)) throw error;
-			}
-			const servers = data && typeof data === "object" && "servers" in data ? data.servers : {};
-			await rm(this.legacyPath, { force: true });
-			return Object.entries(servers).filter(([, credentials]) => credentials.tokens).map(([url, credentials]) => ({
-				url,
-				credentials
-			}));
-		});
-	}
 };
 //#endregion
 //#region package.json
 var version = "0.3.0";
 //#endregion
-//#region src/products.ts
-const products = [
+//#region src/apps.ts
+/** The Fulldev MCP server: the tools of every app the person may use. */
+const server = {
+	title: "Fulldev",
+	url: "https://app.full.dev/mcp"
+};
+/** The environment variable that overrides the server's URL. */
+const urlVariable = "FULLDEV_URL";
+const apps = [
 	{
 		name: "cms",
 		title: "Fulldev CMS",
-		url: "https://cms.full.dev/mcp",
 		description: "Edit your website: text, pages, images and settings, through a pull request.",
 		forms: true
 	},
 	{
 		name: "connect",
 		title: "Fulldev Connect",
-		url: "https://connect.full.dev/mcp",
 		description: "Use your organization's business tools, such as Shopify, with the access Fulldev grants you."
 	},
 	{
 		name: "scan",
 		title: "Fulldev Scan",
-		url: "https://scan.full.dev/mcp",
 		description: "Scan whole websites for problems. For administrators only."
 	},
 	{
 		name: "sites",
 		title: "Fulldev Sites",
-		url: "https://sites.full.dev/mcp",
 		description: "Have Fulldev make a finished website from a brief and tested design options. For administrators only for now."
+	},
+	{
+		name: "pages",
+		title: "Fulldev Pages",
+		description: "Publish reports and plans as clear web pages, composed from ready-made blocks. For administrators only for now."
+	},
+	{
+		name: "contacts",
+		title: "Fulldev Contacts",
+		description: "Look after the daily copy of your Google contacts from one Google account to another: its runs, look-alike questions, pausing and resuming."
 	}
 ];
-function findProduct(name) {
-	return products.find((product) => product.name === name);
+function findApp(name) {
+	return apps.find((app) => app.name === name);
 }
-/** The environment variable that overrides a product's URL, such as FULLDEV_CMS_URL. */
-function urlVariable(product) {
-	return `FULLDEV_${product.name.toUpperCase().replaceAll(/[^A-Z0-9]/g, "_")}_URL`;
+/**
+* A tool's name on the server: an app's tools start with the app's name,
+* which may be left out after `fulldev <app>`.
+*/
+function toolName(app, name) {
+	return name.startsWith(`${app.name}_`) ? name : `${app.name}_${name}`;
 }
-/** The product's server: --url, then FULLDEV_<PRODUCT>_URL, then the default. */
-function resolveTarget(product, flagUrl, env) {
-	const url = flagUrl ?? env[urlVariable(product)] ?? product.url;
+/** The server: --url, then FULLDEV_URL, then app.full.dev. */
+function resolveTarget(flagUrl, env) {
+	const url = flagUrl ?? env["FULLDEV_URL"] ?? server.url;
 	let parsed;
 	try {
 		parsed = new URL(url);
 	} catch {
-		throw new UsageError(`Not a valid server URL for ${product.name}: ${url}`);
+		throw new UsageError(`Not a valid server URL: ${url}`);
 	}
-	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new UsageError(`The server URL for ${product.name} must use https: ${url}`);
+	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new UsageError(`The server URL must use https: ${url}`);
 	return {
-		...product,
+		title: server.title,
 		url: parsed.href,
 		urlFromFlag: flagUrl !== void 0
 	};
@@ -392,52 +381,50 @@ function resolveTarget(product, flagUrl, env) {
 //#region src/args.ts
 const rootCommands = {
 	login: {
-		usage: "fulldev login [product...] [--no-browser] [--url <mcp url>]",
-		summary: "Sign in (all products by default)",
+		usage: "fulldev login [--no-browser] [--url <mcp url>]",
+		summary: "Sign in, once for every app",
 		options: ["browser", "url"],
-		details: `Signs in to each product in turn in your browser, where you choose your
-organization. Each product gets its own tokens; the browser session is shared,
-so after the first product the others are quick. Run fulldev login <product>
-again to switch that product to another organization.`
+		details: `Signs in to the Fulldev MCP server in your browser, where you choose your
+organization when you are in more than one. One sign-in covers every app
+the organization gives you. Run fulldev login again to switch organization.
+
+With --no-browser, open the link in a browser on any computer. When that is
+another computer, as over SSH, the page after sign-in does not load: copy its
+address from the address bar and paste it into this terminal.`
 	},
 	logout: {
-		usage: "fulldev logout [product...] [--url <mcp url>]",
-		summary: "Sign out and revoke the tokens (all products by default)",
+		usage: "fulldev logout [--url <mcp url>]",
+		summary: "Sign out and revoke the tokens",
 		options: ["url"],
-		details: `Revokes the product's refresh token at the authorization server and deletes
-the tokens from this computer. The access token cannot be revoked and expires
-within a day. When revoking fails, the local sign-out still happens and the
-result says so.`
+		details: `Revokes the refresh token at the authorization server and deletes the
+tokens from this computer. The access token cannot be revoked and expires
+within 15 minutes. When revoking fails, the local sign-out still happens and
+the result says so.`
 	},
 	status: {
-		usage: "fulldev status [product...] [--url <mcp url>]",
-		summary: "Show the sign-in of each product",
+		usage: "fulldev status [--url <mcp url>]",
+		summary: "Show the sign-in",
 		options: ["url"],
-		details: `Prints, per product, whether you are signed in, whether the sign-in still
-works, your email, organization and when the access token expires, and where
-the tokens are stored. Exits with 3 when none of the listed products can be
-used, and with 1 when a server could not be reached to check it. Read each
-product's signedIn and valid to see which one needs fulldev login.`
+		details: `Prints whether you are signed in, whether the sign-in still works, your
+email, organization and when the access token expires, and where the tokens
+are stored. Exits with 3 when a sign-in is needed, and with 1 when the
+server could not be reached to check it.`
 	},
-	help: {
-		usage: "fulldev help [command...]",
-		summary: "Show help for a command"
-	}
-};
-const productCommands = {
 	instructions: {
-		usage: "fulldev <product> instructions",
-		summary: "The product's instructions for agents; read them first",
+		usage: "fulldev instructions",
+		summary: "The instructions for agents, of every app you may use; read first",
 		options: [
 			"url",
 			"login",
 			"browser"
 		],
-		details: "Prints the instructions the server sends, as plain text."
+		details: `Prints the instructions the server sends, as plain text: an overview, then
+each app's own, under its name. fulldev <app> instructions prints the
+overview and that app's part.`
 	},
 	tools: {
-		usage: "fulldev <product> tools [name]",
-		summary: "List the tools, or show one tool",
+		usage: "fulldev tools [name]",
+		summary: "List the tools of every app you may use, or show one tool",
 		options: [
 			"url",
 			"login",
@@ -445,10 +432,10 @@ const productCommands = {
 		],
 		details: `Without a name: the name, title and first line of the description of each
 tool. With a name: its description, input schema, output schema and
-annotations.`
+annotations. Each app's tools start with its name, such as cms_.`
 	},
 	call: {
-		usage: "fulldev <product> call <tool> [json | -] [--file <path>]",
+		usage: "fulldev call <tool> [json | -] [--file <path>]",
 		summary: "Call a tool with a JSON object",
 		options: [
 			"file",
@@ -459,10 +446,59 @@ annotations.`
 		details: `The tool's input is a JSON object: the argument, a file with --file, or
 stdin with -. Without input it sends {}. Prints the tool's result as JSON on
 stdout. When the tool fails, prints its error on stderr and exits with 1.`
+	},
+	help: {
+		usage: "fulldev help [command...]",
+		summary: "Show help for a command"
+	}
+};
+/** The commands that use the server, also per app. */
+const serverCommands = [
+	"instructions",
+	"tools",
+	"call"
+];
+const appCommands = {
+	instructions: {
+		usage: "fulldev <app> instructions",
+		summary: "The overview and the app's own instructions; read first",
+		options: [
+			"url",
+			"login",
+			"browser"
+		],
+		details: "Prints them as plain text, as the server sends them."
+	},
+	tools: {
+		usage: "fulldev <app> tools [name]",
+		summary: "List the app's tools, or show one tool",
+		options: [
+			"url",
+			"login",
+			"browser"
+		],
+		details: `Without a name: the name, title and first line of the description of each
+of the app's tools. With a name, with or without the app's prefix: its
+description, input schema, output schema and annotations.`
+	},
+	call: {
+		usage: "fulldev <app> call <tool> [json | -] [--file <path>]",
+		summary: "Call one of the app's tools with a JSON object",
+		options: [
+			"file",
+			"url",
+			"login",
+			"browser"
+		],
+		details: `The tool's name may leave out the app's prefix: fulldev cms call
+list_repositories calls cms_list_repositories. Its input is a JSON object:
+the argument, a file with --file, or stdin with -. Without input it sends
+{}. Prints the tool's result as JSON on stdout. When the tool fails, prints
+its error on stderr and exits with 1.`
 	}
 };
 const formWait = {
-	usage: "fulldev <product> form wait <branchId> <formId> [--timeout <minutes>]",
+	usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>]",
 	summary: "Wait until the person sends a form",
 	options: [
 		"timeout",
@@ -470,56 +506,63 @@ const formWait = {
 		"login",
 		"browser"
 	],
-	details: `Calls wait_for_form until the person sends the form, with a progress line on
-stderr each round, then prints the result. After --timeout minutes (default
-30) it prints the form id and exits with 2, so you can run it again.`
+	details: `Calls cms_wait_for_form until the person sends the form, with a progress
+line on stderr each round, then prints the result. After --timeout minutes
+(default 30) it prints the form id and exits with 2, so you can run it again.`
 };
 const optionHelp = {
-	url: "--url <mcp url>      Use another server for the product, such as a deploy preview",
+	url: "--url <mcp url>      Use another server, such as a deploy preview's",
 	file: "-f, --file <path>    Read the tool's JSON input from a file",
 	timeout: "--timeout <minutes>  How long to wait (default 30)",
 	login: "--no-login           Fail with exit code 3 instead of signing in",
-	browser: "--no-browser         Print the sign-in link without opening a browser"
+	browser: "--no-browser         Print the sign-in link, for a browser here or elsewhere"
 };
 const footer = `Data is JSON on stdout; progress lines go to stderr. Every error is one JSON
 object on stderr: {"error":{"code","message",...}}.
 Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage error.
 `;
 const pad = (text, width) => text.padEnd(width);
-function productTopics(product) {
+function appTopics(app) {
 	const name = (topic) => ({
 		...topic,
-		usage: topic.usage.replace("<product>", product.name)
+		usage: topic.usage.replace("<app>", app.name)
 	});
 	const topics = {};
-	for (const [command, topic] of Object.entries(productCommands)) topics[`${product.name} ${command}`] = name(topic);
-	if (product.forms) {
+	for (const [command, topic] of Object.entries(appCommands)) topics[`${app.name} ${command}`] = name(topic);
+	if (app.forms) {
 		const wait = name(formWait);
-		topics[`${product.name} form`] = wait;
-		topics[`${product.name} form wait`] = wait;
+		topics[`${app.name} form`] = wait;
+		topics[`${app.name} form wait`] = wait;
 	}
 	return topics;
 }
+const serverLine = `Server: ${server.url} (${urlVariable} or --url overrides it)`;
 function rootHelp() {
-	const width = Math.max(...products.map((product) => product.name.length)) + 4;
-	return `Fulldev CLI: use Fulldev products from a terminal or an AI agent.
+	const width = Math.max(...apps.map((app) => app.name.length)) + 4;
+	return `Fulldev CLI: use Fulldev apps from a terminal or an AI agent, through the
+Fulldev MCP server. One sign-in covers every app your organization gives you.
 
 Usage:
-  fulldev <product> <command> [options]
+  fulldev <command> [options]
+  fulldev <app> <command> [options]
+
+Commands:
 ${Object.values(rootCommands).map((topic) => `  ${pad(topic.usage.split(" [--")[0], 32)}${topic.summary}`).join("\n")}
 
-Products:
-${products.map((product) => `  ${pad(product.name, width)}${product.description}`).join("\n")}
+Apps (their tools start with the app's name, such as cms_):
+${apps.map((app) => `  ${pad(app.name, width)}${app.description}`).join("\n")}
 
-Product commands:
-${[...Object.values(productCommands), {
+App commands, for one app's part:
+${[...Object.values(appCommands), {
 		...formWait,
-		usage: formWait.usage.replace("<product>", "cms")
+		usage: formWait.usage.replace("<app>", "cms")
 	}].map((topic) => `  ${topic.usage.split(" [--")[0]}\n      ${topic.summary}`).join("\n")}
 
-Run fulldev <product> instructions first and follow them.
+Run fulldev instructions first and follow them.
 Run fulldev help <command...> for a command's options, for example
 fulldev help cms call.
+
+${serverLine}
 
 Options:
   -h, --help     Show help
@@ -527,19 +570,21 @@ Options:
 
 ${footer}`;
 }
-function productHelp(product) {
-	const topics = Object.values(productTopics(product)).filter((topic, index, all) => all.indexOf(topic) === index);
-	return `${product.title}
+function appHelp(app) {
+	const topics = Object.values(appTopics(app)).filter((topic, index, all) => all.indexOf(topic) === index);
+	return `${app.title}
 
-${product.description}
+${app.description}
 
-Server: ${product.url} (${urlVariable(product)} or --url overrides it)
+Its tools start with ${app.name}_; after fulldev ${app.name} you may leave that out.
 
 Usage:
 ${topics.map((topic) => `  ${topic.usage}\n      ${topic.summary}`).join("\n")}
 
-Run fulldev ${product.name} instructions first and follow them.
-Sign in with fulldev login ${product.name}.
+Run fulldev ${app.name} instructions first and follow them.
+Sign in with fulldev login, once for every app.
+
+${serverLine}
 
 ${footer}`;
 }
@@ -556,11 +601,11 @@ function helpText(topic) {
 	if (topic === "") return rootHelp();
 	const root = rootCommands[topic];
 	if (root) return topicHelp(root);
-	const product = findProduct(topic);
-	if (product) return productHelp(product);
+	const app = findApp(topic);
+	if (app) return appHelp(app);
 	const [name] = topic.split(" ");
-	const owner = findProduct(name ?? "");
-	const found = owner ? productTopics(owner)[topic] : void 0;
+	const owner = findApp(name ?? "");
+	const found = owner ? appTopics(owner)[topic] : void 0;
 	return found ? topicHelp(found) : void 0;
 }
 /** The longest leading words of `words` that name a help topic. */
@@ -626,46 +671,41 @@ function parseCommandLine(argv, env = process.env) {
 		const extra = given.find((key) => !options.includes(key));
 		if (extra) throw new UsageError(`--${extra === "login" || extra === "browser" ? `no-${extra}` : extra} does not work with fulldev ${topic}.`, helpFor(topic));
 	};
+	const target = resolveTarget(values.url, env);
+	const session = {
+		login: values.login ?? true,
+		browser: values.browser ?? true
+	};
 	if (first === "login" || first === "logout" || first === "status") {
 		allow(first, rootCommands[first].options);
-		const named = [...new Set(rest)].map((name) => {
-			const product = findProduct(name);
-			if (!product) throw new UsageError(`Unknown product: ${name}`, helpFor(first));
-			return product;
-		});
-		if (values.url !== void 0 && named.length !== 1) throw new UsageError(`--url needs exactly one product, for example fulldev ${first} cms --url <mcp url>.`, helpFor(first));
-		const targets = (named.length ? named : products).map((product) => resolveTarget(product, values.url, env));
+		if (rest.length) throw new UsageError(`fulldev ${first} takes no app: one sign-in covers every app.`, helpFor(first));
 		if (first === "login") return {
 			kind: "login",
-			targets,
+			target,
 			browser: values.browser ?? true
 		};
 		return {
 			kind: first,
-			targets
+			target
 		};
 	}
-	const product = findProduct(first);
-	if (!product) throw new UsageError(`Unknown command or product: ${first}`);
-	const [command, ...args] = rest;
-	if (command === void 0) {
-		allow(product.name);
+	const app = findApp(first);
+	const command = app ? rest[0] : first;
+	const args = app ? rest.slice(1) : rest;
+	if (!app && !serverCommands.includes(first)) throw new UsageError(`Unknown command or app: ${first}`);
+	if (app && command === void 0) {
+		allow(app.name);
 		return {
 			kind: "help",
-			topic: product.name
+			topic: app.name
 		};
 	}
-	const topic = `${product.name} ${command}`;
-	const known = productTopics(product)[topic];
-	if (!known) throw new UsageError(`Unknown command: fulldev ${topic}`, helpFor(product.name));
+	const topic = app ? `${app.name} ${command}` : first;
+	const known = app ? appTopics(app)[topic] : rootCommands[topic];
+	if (!known) throw new UsageError(`Unknown command: fulldev ${topic}`, helpFor(app?.name ?? ""));
 	allow(topic, known.options);
 	const usage = (count) => {
 		if (!count) throw new UsageError(`Usage: ${known.usage}`, helpFor(topic));
-	};
-	const target = resolveTarget(product, values.url, env);
-	const session = {
-		login: values.login ?? true,
-		browser: values.browser ?? true
 	};
 	switch (command) {
 		case "instructions":
@@ -673,7 +713,8 @@ function parseCommandLine(argv, env = process.env) {
 			return {
 				kind: "instructions",
 				target,
-				session
+				session,
+				app
 			};
 		case "tools":
 			usage(args.length <= 1);
@@ -681,6 +722,7 @@ function parseCommandLine(argv, env = process.env) {
 				kind: "tools",
 				target,
 				session,
+				app,
 				name: args[0]
 			};
 		case "call":
@@ -689,18 +731,19 @@ function parseCommandLine(argv, env = process.env) {
 				kind: "call",
 				target,
 				session,
-				tool: args[0],
+				tool: app ? toolName(app, args[0]) : args[0],
 				json: args[1],
 				file: values.file
 			};
 		default: {
-			usage(args[0] === "wait" && args.length === 3);
+			usage(app !== void 0 && args[0] === "wait" && args.length === 3);
 			const timeoutMinutes = values.timeout === void 0 ? 30 : Number(values.timeout);
 			if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) throw new UsageError("--timeout must be a number of minutes above 0.", helpFor(topic));
 			return {
 				kind: "form-wait",
 				target,
 				session,
+				app,
 				branchId: args[1],
 				formId: args[2],
 				timeoutMinutes
@@ -741,7 +784,7 @@ function toolError(result) {
 }
 //#endregion
 //#region src/form-wait.ts
-/** The one tool the CLI names itself. */
+/** The one tool the CLI names itself, without its app's prefix. */
 const waitTool = "wait_for_form";
 const maxFailures = 3;
 const retryMs = 5e3;
@@ -766,7 +809,7 @@ function wait(ms, signal) {
 * retried a few times; tool and protocol errors end the wait. The deadline
 * also aborts a request that is still running.
 */
-async function waitForForm(callTool, { branchId, formId, timeoutMs, product = "cms", progress = () => {}, now = Date.now, sleep = wait }) {
+async function waitForForm(callTool, { branchId, formId, timeoutMs, app = "cms", progress = () => {}, now = Date.now, sleep = wait }) {
 	const deadline = now() + timeoutMs;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -777,7 +820,7 @@ async function waitForForm(callTool, { branchId, formId, timeoutMs, product = "c
 		for (let round = 1; now() < deadline && !aborted(); round++) {
 			let result;
 			try {
-				result = await callTool(waitTool, {
+				result = await callTool(`${app}_${waitTool}`, {
 					branchId,
 					formId
 				}, signal);
@@ -809,7 +852,7 @@ async function waitForForm(callTool, { branchId, formId, timeoutMs, product = "c
 			waiting: true,
 			branchId,
 			formId,
-			message: `Stopped waiting after ${minutes(timeoutMs)}. Run fulldev ${product} form wait ${branchId} ${formId} to keep waiting, or continue when the person says they are done.`
+			message: `Stopped waiting after ${minutes(timeoutMs)}. Run fulldev ${app} form wait ${branchId} ${formId} to keep waiting, or continue when the person says they are done.`
 		}
 	};
 }
@@ -844,24 +887,12 @@ async function readToolArguments({ json, file, readStdin = () => text(process.st
 //#endregion
 //#region src/oauth.ts
 /**
-* The Fulldev CLI's pre-registered public OAuth client per authorization
-* server issuer. An issuer that is not listed, such as the Clerk development
-* instance behind a deploy preview, gets a dynamically registered client.
+* The Fulldev CLI's OAuth client id: the URL of its Client ID Metadata
+* Document, served by full.dev from apps/website/public/oauth/cli.json. The
+* CLI never registers a client, so an authorization server must support
+* such documents.
 */
-const clientIds = { "https://clerk.full.dev": "3Gjxf97mGc2QVnTv" };
-const trimSlash = (url) => url.replace(/\/+$/, "");
-/** The pre-registered client for an issuer, if there is one. */
-function fixedClient(issuer) {
-	const clientId = issuer ? clientIds[trimSlash(issuer)] : void 0;
-	return clientId ? {
-		client_id: clientId,
-		issuer
-	} : void 0;
-}
-/** The client to use with an issuer: the fixed one, else the registered one. */
-function clientFor(issuer, credentials) {
-	return fixedClient(issuer) ?? credentials.client;
-}
+const clientMetadataUrl = "https://full.dev/oauth/cli.json";
 /** The claims of a JWT, or {} for an opaque token. */
 function claims(token) {
 	try {
@@ -889,17 +920,40 @@ function needsRefresh(credentials, now = Date.now()) {
 	const expires = expiresAt(credentials);
 	return expires !== void 0 && expires - refreshEarlyMs <= now;
 }
-/** Saves tokens for a target, keeping only the email from the ID token. */
-async function saveTokens(store, target, tokens, issuer) {
+/**
+* The scopes a sign-in asks for. The SDK would take the resource's
+* `scopes_supported`, which leaves out `openid`, the authorization server's
+* own scope; without it there is no ID token and so no email.
+*/
+const signInScope = "openid profile email offline_access";
+/** The CLI as the client of an authorization server. */
+const cliClient = (issuer) => ({
+	client_id: clientMetadataUrl,
+	issuer
+});
+/**
+* Saves tokens for a target, keeping only the email from the ID token. A
+* sign-in also saves the client they were issued to, and its email only:
+* it may be another person's. A refresh keeps the email it had.
+*/
+async function saveTokens(store, target, tokens, issuer, client) {
 	const { id_token: idToken, ...kept } = tokens;
 	const { email } = claims(idToken);
-	await store.update(target.url, (current) => ({
-		...current,
-		issuer,
-		tokens: kept,
-		email: typeof email === "string" ? email : current.email,
-		savedAt: Date.now()
-	}));
+	await store.update(target.url, (current) => {
+		const next = {
+			...current,
+			issuer,
+			...client ? { client } : {},
+			tokens: kept,
+			savedAt: Date.now()
+		};
+		delete next.email;
+		const known = typeof email === "string" ? email : client ? void 0 : current.email;
+		return known ? {
+			...next,
+			email: known
+		} : next;
+	});
 }
 /** Finds the target's authorization server and checks its resource. */
 async function discover(target, fetchFn) {
@@ -920,13 +974,10 @@ async function discover(target, fetchFn) {
 	};
 }
 const callbackPath = "/callback";
-/** The redirect URIs a dynamically registered client was registered with. */
-function redirectUris(client) {
-	return client && "redirect_uris" in client ? client.redirect_uris : [];
-}
 /**
-* The SDK's view of one browser sign-in: the fixed client, or a registered
-* one for an unknown issuer, with PKCE S256 and a loopback redirect.
+* The SDK's view of one browser sign-in: the metadata document as client,
+* with PKCE S256 and a loopback redirect, on the server that discovery
+* found.
 */
 var BrowserLoginProvider = class {
 	store;
@@ -934,19 +985,21 @@ var BrowserLoginProvider = class {
 	redirectUrl;
 	loginState;
 	onAuthorizationUrl;
-	verifier = "";
 	discovery;
-	constructor(store, target, redirectUrl, loginState, onAuthorizationUrl) {
+	verifier = "";
+	constructor(store, target, redirectUrl, loginState, onAuthorizationUrl, discovery) {
 		this.store = store;
 		this.target = target;
 		this.redirectUrl = redirectUrl;
 		this.loginState = loginState;
 		this.onAuthorizationUrl = onAuthorizationUrl;
+		this.discovery = discovery;
 	}
+	/** Read by the SDK for the scope; the server reads the metadata document. */
 	get clientMetadata() {
 		return {
 			client_name: "Fulldev CLI",
-			client_uri: "https://github.com/fulldotdev/cli",
+			client_uri: "https://full.dev",
 			redirect_uris: [this.redirectUrl],
 			grant_types: ["authorization_code", "refresh_token"],
 			response_types: ["code"],
@@ -956,24 +1009,15 @@ var BrowserLoginProvider = class {
 	state() {
 		return this.loginState;
 	}
-	async clientInformation(ctx) {
-		const fixed = fixedClient(ctx?.issuer);
-		if (fixed) return fixed;
-		const { client } = await this.store.get(this.target.url);
-		return redirectUris(client).includes(this.redirectUrl) ? client : void 0;
-	}
-	async saveClientInformation(client, ctx) {
-		if (fixedClient(ctx?.issuer ?? client.issuer)) return;
-		await this.store.update(this.target.url, (current) => ({
-			...current,
-			client
-		}));
+	/** Always the metadata document, so the SDK never registers a client. */
+	clientInformation(ctx) {
+		return cliClient(ctx?.issuer ?? "");
 	}
 	/** A sign-in always asks again, so it never reuses stored tokens. */
 	tokens() {}
 	async saveTokens(tokens, ctx) {
-		const issuer = ctx?.issuer ?? tokens.issuer;
-		await saveTokens(this.store, this.target, tokens, issuer ?? "");
+		const issuer = ctx?.issuer ?? tokens.issuer ?? "";
+		await saveTokens(this.store, this.target, tokens, issuer, cliClient(issuer));
 	}
 	redirectToAuthorization(authorizationUrl) {
 		this.onAuthorizationUrl(authorizationUrl);
@@ -990,10 +1034,9 @@ var BrowserLoginProvider = class {
 	discoveryState() {
 		return this.discovery;
 	}
-	async invalidateCredentials(scope) {
+	invalidateCredentials(scope) {
 		if (scope === "verifier") this.verifier = "";
 		if (scope === "discovery" || scope === "all") this.discovery = void 0;
-		if (scope === "client" || scope === "all") await this.store.update(this.target.url, (current) => without(current, "client"));
 	}
 };
 const tile = `<svg width="40" height="40" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7.68" fill="#0737ff"/><g transform="translate(10.72 6.8) scale(0.8)" fill="#ffffff">${[
@@ -1002,8 +1045,11 @@ const tile = `<svg width="40" height="40" viewBox="0 0 32 32" aria-hidden="true"
 	"M11.193 17.238C5.987 16.49 3.213 14.334 2.104 13.229L4.381 12.195C5.161 13.214 7.18 14.91 11.392 15.63C11.949 15.725 12.057 15.858 11.976 16.518C11.894 17.179 11.753 17.319 11.193 17.238Z"
 ].map((d) => `<path d="${d}"/>`).join("")}</g></svg>`;
 const page = (message) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fulldev CLI</title><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#f8f7f4;color:#2b2d33;font:16px/1.6 Geist,system-ui,sans-serif"><main style="max-width:28rem;padding:2rem;text-align:center">${tile}<p>${message}</p></main></body>`;
-/** Listens on 127.0.0.1 for the authorization server's redirect (RFC 8252). */
-async function listenForCallback(preferredPort) {
+/**
+* Listens on 127.0.0.1, on a port the system picks, for the authorization
+* server's redirect (RFC 8252).
+*/
+async function listenForCallback() {
 	let receive = () => {};
 	const received = new Promise((resolve) => {
 		receive = resolve;
@@ -1017,37 +1063,65 @@ async function listenForCallback(preferredPort) {
 		const failed = url.searchParams.has("error");
 		response.writeHead(failed ? 400 : 200, { "content-type": "text/html" }).end(page(failed ? "Sign-in did not complete. You can close this tab and check the terminal." : "Sign-in received. You can close this tab and return to the terminal."), () => receive(url.searchParams));
 	});
-	const listen = (port) => new Promise((resolve, reject) => {
+	await new Promise((resolve, reject) => {
 		server.once("error", reject);
-		server.listen(port, "127.0.0.1", () => {
+		server.listen(0, "127.0.0.1", () => {
 			server.off("error", reject);
 			resolve();
 		});
 	});
-	try {
-		await listen(preferredPort ?? 0);
-	} catch (error) {
-		if (preferredPort === void 0) throw error;
-		await listen(0);
-	}
 	return {
 		port: server.address().port,
-		wait: async (timeoutMs) => {
-			let timer;
-			const timeout = new Promise((_, reject) => {
-				timer = setTimeout(() => reject(new CliError("SIGN_IN_TIMEOUT", `Sign-in timed out after ${Math.round(timeoutMs / 6e4)} minutes.`)), timeoutMs);
-			});
-			try {
-				return await Promise.race([received, timeout]);
-			} finally {
-				clearTimeout(timer);
-			}
-		},
+		received,
 		close: () => {
 			server.closeAllConnections();
 			server.close();
 		}
 	};
+}
+/** The query of a pasted address, when it is the redirect after sign-in. */
+function redirectQuery(line) {
+	try {
+		const { searchParams } = new URL(line.trim());
+		return searchParams.has("state") ? searchParams : void 0;
+	} catch {
+		return;
+	}
+}
+/**
+* Reads the address of the page after sign-in, pasted into the terminal.
+* With the browser on another computer, such as over SSH, the redirect
+* cannot reach this one's loopback port, but the address bar still holds
+* the code. Other lines are asked for again; at the end of the input, the
+* loopback redirect can still arrive.
+*/
+function readPastedRedirect(input, log) {
+	const lines = createInterface({
+		input,
+		terminal: false
+	});
+	return {
+		received: new Promise((resolve) => {
+			lines.on("line", (line) => {
+				const query = redirectQuery(line);
+				if (query) resolve(query);
+				else if (line.trim()) log("That is not the address of the page after sign-in. Paste the whole address from the browser's address bar.");
+			});
+		}),
+		close: () => lines.close()
+	};
+}
+/** The first of the promises to settle, or a timeout error. */
+async function firstWithin(timeoutMs, promises) {
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new CliError("SIGN_IN_TIMEOUT", `Sign-in timed out after ${Math.round(timeoutMs / 6e4)} minutes.`)), timeoutMs);
+	});
+	try {
+		return await Promise.race([...promises, timeout]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 /** Opens a URL in the system browser; the URL is printed as well. */
 function openBrowser(url) {
@@ -1069,24 +1143,38 @@ function openBrowser(url) {
 /**
 * Signs in with the authorization code flow and PKCE S256, the system
 * browser and a loopback redirect on an ephemeral port, asking for the
-* product's MCP URL as the resource.
+* app's MCP URL as the resource. Without the browser, the address after
+* sign-in can also be pasted, for a browser on another computer.
 */
-async function browserLogin(target, store, { browser, log, timeoutMs = 3e5, fetchFn }) {
-	const registered = redirectUris((await store.get(target.url)).client)[0];
-	const callback = await listenForCallback(registered ? Number(new URL(registered).port) || void 0 : void 0);
+async function browserLogin(target, store, { browser, log, timeoutMs = 3e5, fetchFn, input = process.stdin }) {
+	const discovery = await discover(target, fetchFn);
+	if (discovery.metadata.client_id_metadata_document_supported !== true) throw new CliError("CLIENT_METADATA_UNSUPPORTED", `The authorization server ${discovery.issuer} does not support Client ID Metadata Documents, which fulldev needs to sign in to ${target.title}.`);
+	const callback = await listenForCallback();
+	const pasted = browser ? void 0 : readPastedRedirect(input, log);
 	try {
 		const state = randomBytes(16).toString("base64url");
 		const provider = new BrowserLoginProvider(store, target, `http://127.0.0.1:${callback.port}${callbackPath}`, state, (url) => {
-			log(`Sign in to ${target.title} in your browser. If it does not open, open:`);
+			if (browser) {
+				log(`Sign in to ${target.title} in your browser. If it does not open, open:`);
+				log(url.href);
+				openBrowser(url.href);
+				return;
+			}
+			log(`Open this link to sign in to ${target.title}:`);
 			log(url.href);
-			if (browser) openBrowser(url.href);
+			log("If the browser is on another computer, the page after sign-in does not load: copy its address from the address bar and paste it here.");
+		}, {
+			authorizationServerUrl: String(discovery.authorizationServerUrl),
+			resourceMetadata: discovery.resourceMetadata,
+			authorizationServerMetadata: discovery.metadata
 		});
 		if (await auth(provider, {
 			serverUrl: target.url,
+			scope: signInScope,
 			forceReauthorization: true,
 			...fetchFn ? { fetchFn } : {}
 		}) === "AUTHORIZED") return;
-		const params = await callback.wait(timeoutMs);
+		const params = await firstWithin(timeoutMs, [callback.received, ...pasted ? [pasted.received] : []]);
 		if (params.get("state") !== state) throw new CliError("SIGN_IN_FAILED", "Sign-in failed: the response did not match this sign-in.");
 		const error = params.get("error");
 		if (error) throw new CliError("SIGN_IN_FAILED", `Sign-in failed: ${[error, params.get("error_description")].filter(Boolean).join(": ")}`, void 0, { oauthError: error });
@@ -1094,12 +1182,14 @@ async function browserLogin(target, store, { browser, log, timeoutMs = 3e5, fetc
 		if (!code) throw new CliError("SIGN_IN_FAILED", "Sign-in failed: no authorization code.");
 		await auth(provider, {
 			serverUrl: target.url,
+			scope: signInScope,
 			authorizationCode: code,
 			iss: params.get("iss") ?? void 0,
 			...fetchFn ? { fetchFn } : {}
 		});
 	} finally {
 		callback.close();
+		pasted?.close();
 	}
 }
 const formHeaders = {
@@ -1125,7 +1215,7 @@ async function refreshTokens(target, store, fetchFn) {
 	const refreshToken = credentials.tokens?.refresh_token;
 	if (!refreshToken) throw new SignInRequiredError(target);
 	const discovery = await discover(target, fetchFn);
-	const client = clientFor(discovery.issuer, credentials);
+	const { client } = credentials;
 	if (!client || credentials.issuer && credentials.issuer !== discovery.issuer) throw new SignInRequiredError(target);
 	let tokens;
 	try {
@@ -1150,19 +1240,17 @@ async function refreshTokens(target, store, fetchFn) {
 * client. Never throws: the result says what failed.
 */
 async function revokeTokens(target, credentials, fetchFn = fetch) {
-	const { tokens } = credentials;
+	const { tokens, client } = credentials;
 	if (!tokens) return { revoked: true };
+	if (!client) return {
+		revoked: false,
+		error: "The sign-in is from an earlier version of fulldev and cannot be revoked."
+	};
 	try {
-		const metadata = credentials.issuer ? await discoverAuthorizationServerMetadata(credentials.issuer, { fetchFn }) : (await discover(target, fetchFn)).metadata;
-		const endpoint = metadata?.revocation_endpoint;
+		const endpoint = (credentials.issuer ? await discoverAuthorizationServerMetadata(credentials.issuer, { fetchFn }) : (await discover(target, fetchFn)).metadata)?.revocation_endpoint;
 		if (!endpoint) return {
 			revoked: false,
 			error: "The authorization server has no revocation endpoint."
-		};
-		const client = credentials.client ?? fixedClient(metadata.issuer);
-		if (!client) return {
-			revoked: false,
-			error: "No OAuth client to revoke with."
 		};
 		const failures = [];
 		for (const [token, hint] of [[tokens.refresh_token, "refresh_token"]]) {
@@ -1195,7 +1283,7 @@ async function revokeTokens(target, credentials, fetchFn = fetch) {
 	}
 }
 /**
-* Gives the MCP transport the stored access token of one product, refreshing
+* Gives the MCP transport the stored access token of one app, refreshing
 * it when it is about to expire or the server answers 401. Refreshes happen
 * under the store's lock, and a token another process refreshed meanwhile is
 * used instead of refreshing again. It never starts a sign-in.
@@ -1291,12 +1379,10 @@ async function listTools(client) {
 	} while (cursor);
 	return tools;
 }
-async function productStatus(target, io) {
+/** The sign-in, and whether the server still accepts it. */
+async function signInStatus(target, io) {
 	const { credentials, storage } = await io.store.read(target.url);
-	const base = {
-		product: target.name,
-		server: target.url
-	};
+	const base = { server: target.url };
 	if (!credentials.tokens) return {
 		...base,
 		signedIn: false
@@ -1326,11 +1412,11 @@ async function productStatus(target, io) {
 		storage
 	};
 }
-async function status(targets, io) {
-	const results = [];
-	for (const target of targets) results.push(await productStatus(target, io));
+async function status(target, io) {
+	const result = await signInStatus(target, io);
 	const storage = await io.store.storage();
 	io.stdout(json({
+		...result,
 		storage: storage === "keychain" ? {
 			kind: "keychain",
 			service: "fulldev"
@@ -1338,35 +1424,40 @@ async function status(targets, io) {
 			kind: "file",
 			path: io.store.filePath,
 			reason: `The OS keychain is unavailable: ${io.store.keychainError}`
-		},
-		products: results
-	}));
-	if (!results.some((result) => result.signedIn && !("valid" in result && result.valid === false))) return exitCodes.signIn;
-	return results.some((result) => "error" in result) ? exitCodes.error : exitCodes.ok;
-}
-async function logout(targets, io) {
-	const results = [];
-	for (const target of targets) {
-		const credentials = await io.store.get(target.url);
-		if (!credentials.tokens && !credentials.client) {
-			results.push({
-				product: target.name,
-				signedIn: false
-			});
-			continue;
 		}
-		const revocation = await revokeTokens(target, credentials);
-		if (!revocation.revoked) io.stderr(`Could not revoke the tokens of ${target.title}: ${revocation.error} They are deleted from this computer anyway.\n`);
-		await io.store.update(target.url, () => ({}));
-		results.push({
-			product: target.name,
-			signedIn: false,
-			revoked: revocation.revoked,
-			...revocation.error ? { revocationError: revocation.error } : {}
-		});
+	}));
+	if (!result.signedIn || "valid" in result && result.valid === false) return exitCodes.signIn;
+	return "error" in result ? exitCodes.error : exitCodes.ok;
+}
+async function logout(target, io) {
+	const credentials = await io.store.get(target.url);
+	if (!credentials.tokens && !credentials.client) {
+		io.stdout(json({
+			server: target.url,
+			signedIn: false
+		}));
+		return exitCodes.ok;
 	}
-	io.stdout(json({ products: results }));
+	const revocation = await revokeTokens(target, credentials);
+	if (!revocation.revoked) io.stderr(`Could not revoke the tokens of ${target.title}: ${revocation.error} They are deleted from this computer anyway.\n`);
+	await io.store.update(target.url, () => ({}));
+	io.stdout(json({
+		server: target.url,
+		signedIn: false,
+		revoked: revocation.revoked,
+		...revocation.error ? { revocationError: revocation.error } : {}
+	}));
 	return exitCodes.ok;
+}
+/**
+* The part of the server's instructions for one app: the overview before
+* the first app, and the app's own, under its heading `## <title> (<app>_)`.
+*/
+function instructionsFor(text, app) {
+	const [overview = "", ...sections] = text.split(/\n(?=## )/);
+	const own = sections.find((section) => section.split("\n")[0].endsWith(`(${app.name}_)`));
+	if (!own) throw new CliError("APP_NOT_AVAILABLE", `${app.title} is not among your apps in this organization. Run fulldev instructions for the apps you may use, or fulldev login to choose another organization.`);
+	return `${overview.trimEnd()}\n\n${own.trim()}`;
 }
 async function run(command, io) {
 	const log = (line) => io.stderr(`${line}\n`);
@@ -1378,40 +1469,32 @@ async function run(command, io) {
 			io.stdout(helpText(command.topic) ?? "");
 			return exitCodes.ok;
 	}
-	for (const { url, credentials } of await io.store.migrate()) {
-		const product = products.find((candidate) => candidate.url === url);
-		const name = product?.name;
-		if (product) await revokeTokens({
-			...product,
-			urlFromFlag: false
-		}, credentials);
-		log(`fulldev now signs in per product and keeps tokens in the OS keychain. The sign-in from fulldev 0.1.0 for ${url} was removed; run fulldev login${name ? ` ${name}` : ""} to sign in again.`);
-	}
 	switch (command.kind) {
-		case "login":
-			for (const target of command.targets) {
-				const previous = await io.store.get(target.url);
-				await browserLogin(target, io.store, {
-					browser: command.browser,
-					log
-				});
-				if (previous.tokens) {
-					const revocation = await revokeTokens(target, previous);
-					if (!revocation.revoked) log(`Could not revoke the previous sign-in to ${target.title}: ${revocation.error}`);
-				}
-				log(`Signed in to ${target.title}.`);
+		case "login": {
+			const { target } = command;
+			const previous = await io.store.get(target.url);
+			await browserLogin(target, io.store, {
+				browser: command.browser,
+				log
+			});
+			if (previous.tokens) {
+				const revocation = await revokeTokens(target, previous);
+				if (!revocation.revoked) log(`Could not revoke the previous sign-in to ${target.title}: ${revocation.error}`);
 			}
-			return status(command.targets, io);
-		case "logout": return logout(command.targets, io);
-		case "status": return status(command.targets, io);
+			log(`Signed in to ${target.title}.`);
+			return status(target, io);
+		}
+		case "logout": return logout(command.target, io);
+		case "status": return status(command.target, io);
 		case "instructions": {
 			const text = await withClient(command.target, command.session, io, async (client) => client.getInstructions());
 			if (!text) log("The server sent no instructions.");
-			else io.stdout(`${text}\n`);
+			else io.stdout(`${command.app ? instructionsFor(text, command.app) : text}\n`);
 			return exitCodes.ok;
 		}
 		case "tools": {
-			const tools = await withClient(command.target, command.session, io, listTools);
+			const { app } = command;
+			const tools = (await withClient(command.target, command.session, io, listTools)).filter((tool) => !app || tool.name.startsWith(`${app.name}_`));
 			if (!command.name) {
 				io.stdout(json(tools.map((tool) => ({
 					name: tool.name,
@@ -1420,8 +1503,9 @@ async function run(command, io) {
 				}))));
 				return exitCodes.ok;
 			}
-			const tool = tools.find((candidate) => candidate.name === command.name);
-			if (!tool) throw new CliError("NOT_FOUND", `${command.target.title} has no tool named ${command.name}. Run fulldev ${command.target.name} tools for the list.`);
+			const name = app ? toolName(app, command.name) : command.name;
+			const tool = tools.find((candidate) => candidate.name === name);
+			if (!tool) throw new CliError("NOT_FOUND", `You have no tool named ${name}. Run fulldev ${app ? `${app.name} ` : ""}tools for the list.`);
 			io.stdout(json({
 				name: tool.name,
 				title: tool.title ?? tool.annotations?.title,
@@ -1459,7 +1543,7 @@ async function run(command, io) {
 				branchId: command.branchId,
 				formId: command.formId,
 				timeoutMs: command.timeoutMinutes * 6e4,
-				product: command.target.name,
+				app: command.app.name,
 				progress: log
 			}));
 			if (outcome.status === "error") {

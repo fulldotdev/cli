@@ -26,8 +26,8 @@ import {
   expiresAt,
   revokeTokens,
 } from "./oauth.ts"
-import { products } from "./products.ts"
-import type { Target } from "./products.ts"
+import { toolName } from "./apps.ts"
+import type { App, Target } from "./apps.ts"
 import { toolError, toolOutput } from "./result.ts"
 
 /** Where the CLI writes, and whether a person is at the terminal. */
@@ -117,9 +117,10 @@ async function listTools(client: Client) {
   return tools
 }
 
-async function productStatus(target: Target, io: Io) {
+/** The sign-in, and whether the server still accepts it. */
+async function signInStatus(target: Target, io: Io) {
   const { credentials, storage } = await io.store.read(target.url)
-  const base = { product: target.name, server: target.url }
+  const base = { server: target.url }
   if (!credentials.tokens) return { ...base, signedIn: false }
   // valid: the server accepts the sign-in; unknown (with error) when it could not be checked.
   let valid: boolean | undefined = true
@@ -149,12 +150,12 @@ async function productStatus(target: Target, io: Io) {
   }
 }
 
-async function status(targets: Array<Target>, io: Io) {
-  const results = []
-  for (const target of targets) results.push(await productStatus(target, io))
+async function status(target: Target, io: Io) {
+  const result = await signInStatus(target, io)
   const storage = await io.store.storage()
   io.stdout(
     json({
+      ...result,
       storage:
         storage === "keychain"
           ? { kind: "keychain", service: "fulldev" }
@@ -163,46 +164,51 @@ async function status(targets: Array<Target>, io: Io) {
               path: io.store.filePath,
               reason: `The OS keychain is unavailable: ${io.store.keychainError}`,
             },
-      products: results,
     }),
   )
-  // Sign-in is needed when no listed product can be used; a product the
-  // person does not use does not make status fail.
-  if (
-    !results.some(
-      (result) =>
-        result.signedIn && !("valid" in result && result.valid === false),
-    )
-  )
+  if (!result.signedIn || ("valid" in result && result.valid === false))
     return exitCodes.signIn
-  return results.some((result) => "error" in result)
-    ? exitCodes.error
-    : exitCodes.ok
+  return "error" in result ? exitCodes.error : exitCodes.ok
 }
 
-async function logout(targets: Array<Target>, io: Io) {
-  const results = []
-  for (const target of targets) {
-    const credentials = await io.store.get(target.url)
-    if (!credentials.tokens && !credentials.client) {
-      results.push({ product: target.name, signedIn: false })
-      continue
-    }
-    const revocation = await revokeTokens(target, credentials)
-    if (!revocation.revoked)
-      io.stderr(
-        `Could not revoke the tokens of ${target.title}: ${revocation.error} They are deleted from this computer anyway.\n`,
-      )
-    await io.store.update(target.url, () => ({}))
-    results.push({
-      product: target.name,
+async function logout(target: Target, io: Io) {
+  const credentials = await io.store.get(target.url)
+  if (!credentials.tokens && !credentials.client) {
+    io.stdout(json({ server: target.url, signedIn: false }))
+    return exitCodes.ok
+  }
+  const revocation = await revokeTokens(target, credentials)
+  if (!revocation.revoked)
+    io.stderr(
+      `Could not revoke the tokens of ${target.title}: ${revocation.error} They are deleted from this computer anyway.\n`,
+    )
+  await io.store.update(target.url, () => ({}))
+  io.stdout(
+    json({
+      server: target.url,
       signedIn: false,
       revoked: revocation.revoked,
       ...(revocation.error ? { revocationError: revocation.error } : {}),
-    })
-  }
-  io.stdout(json({ products: results }))
+    }),
+  )
   return exitCodes.ok
+}
+
+/**
+ * The part of the server's instructions for one app: the overview before
+ * the first app, and the app's own, under its heading `## <title> (<app>_)`.
+ */
+export function instructionsFor(text: string, app: App) {
+  const [overview = "", ...sections] = text.split(/\n(?=## )/)
+  const own = sections.find((section) =>
+    section.split("\n")[0]!.endsWith(`(${app.name}_)`),
+  )
+  if (!own)
+    throw new CliError(
+      "APP_NOT_AVAILABLE",
+      `${app.title} is not among your apps in this organization. Run fulldev instructions for the apps you may use, or fulldev login to choose another organization.`,
+    )
+  return `${overview.trimEnd()}\n\n${own.trim()}`
 }
 
 async function run(command: Command, io: Io): Promise<number> {
@@ -216,41 +222,30 @@ async function run(command: Command, io: Io): Promise<number> {
       return exitCodes.ok
   }
 
-  for (const { url, credentials } of await io.store.migrate()) {
-    const product = products.find((candidate) => candidate.url === url)
-    const name = product?.name
-    // Best effort: the old tokens stop working at Clerk too.
-    if (product)
-      await revokeTokens({ ...product, urlFromFlag: false }, credentials)
-    log(
-      `fulldev now signs in per product and keeps tokens in the OS keychain. The sign-in from fulldev 0.1.0 for ${url} was removed; run fulldev login${name ? ` ${name}` : ""} to sign in again.`,
-    )
-  }
-
   switch (command.kind) {
-    case "login":
-      for (const target of command.targets) {
-        // A new sign-in, such as one to switch organization, replaces the
-        // old one, so the old tokens are revoked once it succeeds.
-        const previous = await io.store.get(target.url)
-        await browserLogin(target, io.store, {
-          browser: command.browser,
-          log,
-        })
-        if (previous.tokens) {
-          const revocation = await revokeTokens(target, previous)
-          if (!revocation.revoked)
-            log(
-              `Could not revoke the previous sign-in to ${target.title}: ${revocation.error}`,
-            )
-        }
-        log(`Signed in to ${target.title}.`)
+    case "login": {
+      const { target } = command
+      // A new sign-in, such as one to switch organization, replaces the
+      // old one, so the old tokens are revoked once it succeeds.
+      const previous = await io.store.get(target.url)
+      await browserLogin(target, io.store, {
+        browser: command.browser,
+        log,
+      })
+      if (previous.tokens) {
+        const revocation = await revokeTokens(target, previous)
+        if (!revocation.revoked)
+          log(
+            `Could not revoke the previous sign-in to ${target.title}: ${revocation.error}`,
+          )
       }
-      return status(command.targets, io)
+      log(`Signed in to ${target.title}.`)
+      return status(target, io)
+    }
     case "logout":
-      return logout(command.targets, io)
+      return logout(command.target, io)
     case "status":
-      return status(command.targets, io)
+      return status(command.target, io)
     case "instructions": {
       const text = await withClient(
         command.target,
@@ -259,16 +254,17 @@ async function run(command: Command, io: Io): Promise<number> {
         async (client) => client.getInstructions(),
       )
       if (!text) log("The server sent no instructions.")
-      else io.stdout(`${text}\n`)
+      else
+        io.stdout(
+          `${command.app ? instructionsFor(text, command.app) : text}\n`,
+        )
       return exitCodes.ok
     }
     case "tools": {
-      const tools = await withClient(
-        command.target,
-        command.session,
-        io,
-        listTools,
-      )
+      const { app } = command
+      const tools = (
+        await withClient(command.target, command.session, io, listTools)
+      ).filter((tool) => !app || tool.name.startsWith(`${app.name}_`))
       if (!command.name) {
         io.stdout(
           json(
@@ -281,11 +277,12 @@ async function run(command: Command, io: Io): Promise<number> {
         )
         return exitCodes.ok
       }
-      const tool = tools.find((candidate) => candidate.name === command.name)
+      const name = app ? toolName(app, command.name) : command.name
+      const tool = tools.find((candidate) => candidate.name === name)
       if (!tool)
         throw new CliError(
           "NOT_FOUND",
-          `${command.target.title} has no tool named ${command.name}. Run fulldev ${command.target.name} tools for the list.`,
+          `You have no tool named ${name}. Run fulldev ${app ? `${app.name} ` : ""}tools for the list.`,
         )
       io.stdout(
         json({
@@ -337,7 +334,7 @@ async function run(command: Command, io: Io): Promise<number> {
               branchId: command.branchId,
               formId: command.formId,
               timeoutMs: command.timeoutMinutes * 60_000,
-              product: command.target.name,
+              app: command.app.name,
               progress: log,
             },
           ),

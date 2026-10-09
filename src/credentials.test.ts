@@ -97,7 +97,7 @@ describe("CredentialStore", () => {
     expect(keychainService).toBe("fulldev")
   })
 
-  it("keeps one keychain entry per product server and no file", async () => {
+  it("keeps one keychain entry per app server and no file", async () => {
     const { secrets, keychain } = memoryKeychain()
     const store = new CredentialStore(await directory(), async () => keychain)
     await store.update(cms, () => ({ tokens, email: "a@example.com" }))
@@ -163,30 +163,6 @@ describe("CredentialStore", () => {
     await store.update(cms, (current) => ({ ...current, email: "e" }))
     expect((await store.read(cms)).storage).toBe("keychain")
     expect(await exists(store.filePath)).toBe(false)
-  })
-
-  it("removes the 0.1.0 credentials file once and reports who was signed in", async () => {
-    const dir = await directory()
-    const { keychain } = memoryKeychain()
-    const store = new CredentialStore(dir, async () => keychain)
-    await writeFile(
-      store.legacyPath,
-      JSON.stringify({
-        servers: {
-          [cms]: { client: { client_id: "dcr" }, tokens, savedAt: 1 },
-          "https://preview.example.com/mcp": { client: { client_id: "p" } },
-        },
-      }),
-    )
-    expect(await store.migrate()).toEqual([
-      {
-        url: cms,
-        credentials: { client: { client_id: "dcr" }, tokens, savedAt: 1 },
-      },
-    ])
-    expect(await exists(store.legacyPath)).toBe(false)
-    expect(await store.get(cms)).toEqual({})
-    expect(await store.migrate()).toEqual([])
   })
 })
 

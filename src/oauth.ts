@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
+import { createInterface } from "node:readline"
 
 import {
   OAuthError,
@@ -28,31 +29,15 @@ import type {
 
 import type { CredentialStore, Credentials } from "./credentials.ts"
 import { CliError, SignInRequiredError } from "./errors.ts"
-import type { Target } from "./products.ts"
+import type { Target } from "./apps.ts"
 
 /**
- * The Fulldev CLI's pre-registered public OAuth client per authorization
- * server issuer. An issuer that is not listed, such as the Clerk development
- * instance behind a deploy preview, gets a dynamically registered client.
+ * The Fulldev CLI's OAuth client id: the URL of its Client ID Metadata
+ * Document, served by full.dev from apps/website/public/oauth/cli.json. The
+ * CLI never registers a client, so an authorization server must support
+ * such documents.
  */
-export const clientIds: Record<string, string> = {
-  "https://clerk.full.dev": "3Gjxf97mGc2QVnTv",
-}
-
-const trimSlash = (url: string) => url.replace(/\/+$/, "")
-
-/** The pre-registered client for an issuer, if there is one. */
-export function fixedClient(
-  issuer: string | undefined,
-): StoredOAuthClientInformation | undefined {
-  const clientId = issuer ? clientIds[trimSlash(issuer)] : undefined
-  return clientId ? { client_id: clientId, issuer } : undefined
-}
-
-/** The client to use with an issuer: the fixed one, else the registered one. */
-function clientFor(issuer: string | undefined, credentials: Credentials) {
-  return fixedClient(issuer) ?? credentials.client
-}
+export const clientMetadataUrl = "https://full.dev/oauth/cli.json"
 
 /** The claims of a JWT, or {} for an opaque token. */
 export function claims(token: string | undefined): Record<string, unknown> {
@@ -92,22 +77,46 @@ function needsRefresh(credentials: Credentials, now = Date.now()) {
   return expires !== undefined && expires - refreshEarlyMs <= now
 }
 
-/** Saves tokens for a target, keeping only the email from the ID token. */
+/**
+ * The scopes a sign-in asks for. The SDK would take the resource's
+ * `scopes_supported`, which leaves out `openid`, the authorization server's
+ * own scope; without it there is no ID token and so no email.
+ */
+const signInScope = "openid profile email offline_access"
+
+/** The CLI as the client of an authorization server. */
+const cliClient = (issuer: string): StoredOAuthClientInformation => ({
+  client_id: clientMetadataUrl,
+  issuer,
+})
+
+/**
+ * Saves tokens for a target, keeping only the email from the ID token. A
+ * sign-in also saves the client they were issued to, and its email only:
+ * it may be another person's. A refresh keeps the email it had.
+ */
 async function saveTokens(
   store: CredentialStore,
   target: Target,
   tokens: OAuthTokens,
   issuer: string,
+  client?: StoredOAuthClientInformation,
 ) {
   const { id_token: idToken, ...kept } = tokens
   const { email } = claims(idToken)
-  await store.update(target.url, (current) => ({
-    ...current,
-    issuer,
-    tokens: kept,
-    email: typeof email === "string" ? email : current.email,
-    savedAt: Date.now(),
-  }))
+  await store.update(target.url, (current) => {
+    const next: Credentials = {
+      ...current,
+      issuer,
+      ...(client ? { client } : {}),
+      tokens: kept,
+      savedAt: Date.now(),
+    }
+    delete next.email
+    const known =
+      typeof email === "string" ? email : client ? undefined : current.email
+    return known ? { ...next, email: known } : next
+  })
 }
 
 /** Metadata fields the SDK's type leaves out (RFC 8414, RFC 8628). */
@@ -119,13 +128,13 @@ interface Discovery {
   authorizationServerUrl: string | URL
   metadata: ServerMetadata
   issuer: string
-  /** The product's MCP URL as the resource server names it. */
+  /** The app's MCP URL as the resource server names it. */
   resource: string
   resourceMetadata: OAuthProtectedResourceMetadata
 }
 
 /** Finds the target's authorization server and checks its resource. */
-export async function discover(
+async function discover(
   target: Target,
   fetchFn?: FetchLike,
 ): Promise<Discovery> {
@@ -156,28 +165,15 @@ export async function discover(
   }
 }
 
-/** The scopes the resource asks for, plus offline_access for a refresh token. */
-export function scopeFor({ resourceMetadata, metadata }: Discovery) {
-  const scopes = new Set(resourceMetadata.scopes_supported ?? [])
-  if (metadata.scopes_supported?.includes("offline_access"))
-    scopes.add("offline_access")
-  return [...scopes].join(" ")
-}
-
 const callbackPath = "/callback"
 
-/** The redirect URIs a dynamically registered client was registered with. */
-function redirectUris(client: StoredOAuthClientInformation | undefined) {
-  return client && "redirect_uris" in client ? client.redirect_uris : []
-}
-
 /**
- * The SDK's view of one browser sign-in: the fixed client, or a registered
- * one for an unknown issuer, with PKCE S256 and a loopback redirect.
+ * The SDK's view of one browser sign-in: the metadata document as client,
+ * with PKCE S256 and a loopback redirect, on the server that discovery
+ * found.
  */
 class BrowserLoginProvider implements OAuthClientProvider {
   private verifier = ""
-  private discovery: OAuthDiscoveryState | undefined
 
   constructor(
     private readonly store: CredentialStore,
@@ -185,12 +181,14 @@ class BrowserLoginProvider implements OAuthClientProvider {
     readonly redirectUrl: string,
     private readonly loginState: string,
     private readonly onAuthorizationUrl: (url: URL) => void,
+    private discovery: OAuthDiscoveryState | undefined,
   ) {}
 
+  /** Read by the SDK for the scope; the server reads the metadata document. */
   get clientMetadata(): OAuthClientMetadata {
     return {
       client_name: "Fulldev CLI",
-      client_uri: "https://github.com/fulldotdev/cli",
+      client_uri: "https://full.dev",
       redirect_uris: [this.redirectUrl],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
@@ -202,23 +200,9 @@ class BrowserLoginProvider implements OAuthClientProvider {
     return this.loginState
   }
 
-  async clientInformation(ctx?: OAuthClientInformationContext) {
-    const fixed = fixedClient(ctx?.issuer)
-    if (fixed) return fixed
-    const { client } = await this.store.get(this.target.url)
-    // A client registered for another loopback port cannot receive this code.
-    return redirectUris(client).includes(this.redirectUrl) ? client : undefined
-  }
-
-  async saveClientInformation(
-    client: StoredOAuthClientInformation,
-    ctx?: OAuthClientInformationContext,
-  ) {
-    if (fixedClient(ctx?.issuer ?? client.issuer)) return
-    await this.store.update(this.target.url, (current) => ({
-      ...current,
-      client,
-    }))
+  /** Always the metadata document, so the SDK never registers a client. */
+  clientInformation(ctx?: OAuthClientInformationContext) {
+    return cliClient(ctx?.issuer ?? "")
   }
 
   /** A sign-in always asks again, so it never reuses stored tokens. */
@@ -227,8 +211,8 @@ class BrowserLoginProvider implements OAuthClientProvider {
   }
 
   async saveTokens(tokens: OAuthTokens, ctx?: OAuthClientInformationContext) {
-    const issuer = ctx?.issuer ?? (tokens as { issuer?: string }).issuer
-    await saveTokens(this.store, this.target, tokens, issuer ?? "")
+    const issuer = ctx?.issuer ?? (tokens as { issuer?: string }).issuer ?? ""
+    await saveTokens(this.store, this.target, tokens, issuer, cliClient(issuer))
   }
 
   redirectToAuthorization(authorizationUrl: URL) {
@@ -251,21 +235,17 @@ class BrowserLoginProvider implements OAuthClientProvider {
     return this.discovery
   }
 
-  async invalidateCredentials(
+  invalidateCredentials(
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ) {
     if (scope === "verifier") this.verifier = ""
     if (scope === "discovery" || scope === "all") this.discovery = undefined
-    if (scope === "client" || scope === "all")
-      await this.store.update(this.target.url, (current) =>
-        without(current, "client"),
-      )
   }
 }
 
 interface Callback {
   port: number
-  wait: (timeoutMs: number) => Promise<URLSearchParams>
+  received: Promise<URLSearchParams>
   close: () => void
 }
 
@@ -281,8 +261,11 @@ const tile = `<svg width="40" height="40" viewBox="0 0 32 32" aria-hidden="true"
 const page = (message: string) =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fulldev CLI</title><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#f8f7f4;color:#2b2d33;font:16px/1.6 Geist,system-ui,sans-serif"><main style="max-width:28rem;padding:2rem;text-align:center">${tile}<p>${message}</p></main></body>`
 
-/** Listens on 127.0.0.1 for the authorization server's redirect (RFC 8252). */
-async function listenForCallback(preferredPort?: number): Promise<Callback> {
+/**
+ * Listens on 127.0.0.1, on a port the system picks, for the authorization
+ * server's redirect (RFC 8252).
+ */
+async function listenForCallback(): Promise<Callback> {
   let receive: (params: URLSearchParams) => void = () => {}
   const received = new Promise<URLSearchParams>((resolve) => {
     receive = resolve
@@ -305,46 +288,77 @@ async function listenForCallback(preferredPort?: number): Promise<Callback> {
         () => receive(url.searchParams),
       )
   })
-  const listen = (port: number) =>
-    new Promise<void>((resolve, reject) => {
-      server.once("error", reject)
-      server.listen(port, "127.0.0.1", () => {
-        server.off("error", reject)
-        resolve()
-      })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject)
+      resolve()
     })
-  try {
-    await listen(preferredPort ?? 0)
-  } catch (error) {
-    if (preferredPort === undefined) throw error
-    await listen(0)
-  }
+  })
   return {
     port: (server.address() as AddressInfo).port,
-    wait: async (timeoutMs) => {
-      let timer: NodeJS.Timeout | undefined
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(
-              new CliError(
-                "SIGN_IN_TIMEOUT",
-                `Sign-in timed out after ${Math.round(timeoutMs / 60_000)} minutes.`,
-              ),
-            ),
-          timeoutMs,
-        )
-      })
-      try {
-        return await Promise.race([received, timeout])
-      } finally {
-        clearTimeout(timer)
-      }
-    },
+    received,
     close: () => {
       server.closeAllConnections()
       server.close()
     },
+  }
+}
+
+/** The query of a pasted address, when it is the redirect after sign-in. */
+function redirectQuery(line: string) {
+  try {
+    const { searchParams } = new URL(line.trim())
+    return searchParams.has("state") ? searchParams : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Reads the address of the page after sign-in, pasted into the terminal.
+ * With the browser on another computer, such as over SSH, the redirect
+ * cannot reach this one's loopback port, but the address bar still holds
+ * the code. Other lines are asked for again; at the end of the input, the
+ * loopback redirect can still arrive.
+ */
+function readPastedRedirect(
+  input: NodeJS.ReadableStream,
+  log: (line: string) => void,
+) {
+  const lines = createInterface({ input, terminal: false })
+  const received = new Promise<URLSearchParams>((resolve) => {
+    lines.on("line", (line) => {
+      const query = redirectQuery(line)
+      if (query) resolve(query)
+      else if (line.trim())
+        log(
+          "That is not the address of the page after sign-in. Paste the whole address from the browser's address bar.",
+        )
+    })
+  })
+  return { received, close: () => lines.close() }
+}
+
+/** The first of the promises to settle, or a timeout error. */
+async function firstWithin<T>(timeoutMs: number, promises: Array<Promise<T>>) {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new CliError(
+            "SIGN_IN_TIMEOUT",
+            `Sign-in timed out after ${Math.round(timeoutMs / 60_000)} minutes.`,
+          ),
+        ),
+      timeoutMs,
+    )
+  })
+  try {
+    return await Promise.race([...promises, timeout])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -366,27 +380,40 @@ function openBrowser(url: string) {
 }
 
 export interface BrowserLoginOptions {
+  /** Opens the system browser; without it the person opens the link and may paste the address after sign-in. */
   browser: boolean
   log: (line: string) => void
   timeoutMs?: number
   fetchFn?: FetchLike
+  /** Where a pasted address is read without the browser; stdin by default. */
+  input?: NodeJS.ReadableStream
 }
 
 /**
  * Signs in with the authorization code flow and PKCE S256, the system
  * browser and a loopback redirect on an ephemeral port, asking for the
- * product's MCP URL as the resource.
+ * app's MCP URL as the resource. Without the browser, the address after
+ * sign-in can also be pasted, for a browser on another computer.
  */
 export async function browserLogin(
   target: Target,
   store: CredentialStore,
-  { browser, log, timeoutMs = 5 * 60_000, fetchFn }: BrowserLoginOptions,
+  {
+    browser,
+    log,
+    timeoutMs = 5 * 60_000,
+    fetchFn,
+    input = process.stdin,
+  }: BrowserLoginOptions,
 ) {
-  // A registered client (unknown issuer) keeps the port it was registered with.
-  const registered = redirectUris((await store.get(target.url)).client)[0]
-  const callback = await listenForCallback(
-    registered ? Number(new URL(registered).port) || undefined : undefined,
-  )
+  const discovery = await discover(target, fetchFn)
+  if (discovery.metadata.client_id_metadata_document_supported !== true)
+    throw new CliError(
+      "CLIENT_METADATA_UNSUPPORTED",
+      `The authorization server ${discovery.issuer} does not support Client ID Metadata Documents, which fulldev needs to sign in to ${target.title}.`,
+    )
+  const callback = await listenForCallback()
+  const pasted = browser ? undefined : readPastedRedirect(input, log)
   try {
     const state = randomBytes(16).toString("base64url")
     const provider = new BrowserLoginProvider(
@@ -395,20 +422,37 @@ export async function browserLogin(
       `http://127.0.0.1:${callback.port}${callbackPath}`,
       state,
       (url) => {
-        log(
-          `Sign in to ${target.title} in your browser. If it does not open, open:`,
-        )
+        if (browser) {
+          log(
+            `Sign in to ${target.title} in your browser. If it does not open, open:`,
+          )
+          log(url.href)
+          openBrowser(url.href)
+          return
+        }
+        log(`Open this link to sign in to ${target.title}:`)
         log(url.href)
-        if (browser) openBrowser(url.href)
+        log(
+          "If the browser is on another computer, the page after sign-in does not load: copy its address from the address bar and paste it here.",
+        )
+      },
+      {
+        authorizationServerUrl: String(discovery.authorizationServerUrl),
+        resourceMetadata: discovery.resourceMetadata,
+        authorizationServerMetadata: discovery.metadata,
       },
     )
     const started = await auth(provider, {
       serverUrl: target.url,
+      scope: signInScope,
       forceReauthorization: true,
       ...(fetchFn ? { fetchFn } : {}),
     })
     if (started === "AUTHORIZED") return
-    const params = await callback.wait(timeoutMs)
+    const params = await firstWithin(timeoutMs, [
+      callback.received,
+      ...(pasted ? [pasted.received] : []),
+    ])
     if (params.get("state") !== state)
       throw new CliError(
         "SIGN_IN_FAILED",
@@ -430,12 +474,14 @@ export async function browserLogin(
       )
     await auth(provider, {
       serverUrl: target.url,
+      scope: signInScope,
       authorizationCode: code,
       iss: params.get("iss") ?? undefined,
       ...(fetchFn ? { fetchFn } : {}),
     })
   } finally {
     callback.close()
+    pasted?.close()
   }
 }
 
@@ -471,7 +517,7 @@ export async function refreshTokens(
   const refreshToken = credentials.tokens?.refresh_token
   if (!refreshToken) throw new SignInRequiredError(target)
   const discovery = await discover(target, fetchFn)
-  const client = clientFor(discovery.issuer, credentials)
+  const { client } = credentials
   if (
     !client ||
     (credentials.issuer && credentials.issuer !== discovery.issuer)
@@ -515,8 +561,16 @@ export async function revokeTokens(
   credentials: Credentials,
   fetchFn: FetchLike = fetch,
 ): Promise<RevokeResult> {
-  const { tokens } = credentials
+  const { tokens, client } = credentials
   if (!tokens) return { revoked: true }
+  // Tokens are revoked with the client they were issued to. A sign-in from
+  // before fulldev identified itself with its metadata document has none.
+  if (!client)
+    return {
+      revoked: false,
+      error:
+        "The sign-in is from an earlier version of fulldev and cannot be revoked.",
+    }
   try {
     const metadata: ServerMetadata | undefined = credentials.issuer
       ? await discoverAuthorizationServerMetadata(credentials.issuer, {
@@ -529,14 +583,9 @@ export async function revokeTokens(
         revoked: false,
         error: "The authorization server has no revocation endpoint.",
       }
-    // Tokens are revoked with the client they were issued to, which for a
-    // sign-in from fulldev 0.1.0 is its dynamically registered client.
-    const client = credentials.client ?? fixedClient(metadata.issuer)
-    if (!client)
-      return { revoked: false, error: "No OAuth client to revoke with." }
     const failures: Array<string> = []
-    // Only the refresh token: Clerk's access tokens are JWTs that cannot be
-    // revoked and expire within a day.
+    // Only the refresh token: the access tokens are JWTs that cannot be
+    // revoked and expire within 15 minutes.
     for (const [token, hint] of [
       [tokens.refresh_token, "refresh_token"],
     ] as const) {
@@ -571,7 +620,7 @@ export async function revokeTokens(
 }
 
 /**
- * Gives the MCP transport the stored access token of one product, refreshing
+ * Gives the MCP transport the stored access token of one app, refreshing
  * it when it is about to expire or the server answers 401. Refreshes happen
  * under the store's lock, and a token another process refreshed meanwhile is
  * used instead of refreshing again. It never starts a sign-in.
