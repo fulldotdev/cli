@@ -1,5 +1,25 @@
 # fulldev
 
+## 0.4.0
+
+### Minor Changes
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Sign in through Fulldev's own account pages at `https://app.full.dev`; existing sign-ins must sign in again.
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Fulldev's products are now called apps. The help lists them under "Apps" and reads `fulldev <app> <command>`, and the JSON of `fulldev status`, `fulldev logout` and a sign-in error names each one as `app` (a list under `apps`) instead of `product` (`products`). Commands, names and servers stay the same.
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Add Fulldev Contacts as the app `contacts`: check, pause and resume the daily copy of your Google contacts, and answer its look-alike questions.
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Every app through one Fulldev MCP server, at `https://app.full.dev/mcp`, with one sign-in. `fulldev login`, `fulldev status` and `fulldev logout` no longer take an app, and `status` and `logout` print that one sign-in as one object instead of a list under `apps`; a sign-in error names `fulldev login`. Each app's tools start with its name, such as `cms_list_repositories`. `fulldev instructions`, `fulldev tools` and `fulldev call` work across every app you may use; `fulldev <app> instructions|tools|call` show and call that app's part, with tool names with or without its prefix. `FULLDEV_URL` replaces `FULLDEV_<APP>_URL`.
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Add Fulldev Pages as the app `pages`.
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Sign in over SSH: with `--no-browser`, paste the address of the page after sign-in into the terminal when the browser is on another computer. fulldev no longer registers an OAuth client itself and fails with `CLIENT_METADATA_UNSUPPORTED` on a server without Client ID Metadata Documents. It no longer removes the sign-in file of version 0.1.0; delete `~/.config/fulldev/credentials.json` if it is still there.
+
+### Patch Changes
+
+- [#10](https://github.com/fulldotdev/cli/pull/10) [`acb41d5`](https://github.com/fulldotdev/cli/commit/acb41d5eb33461e377e1d282740b5594125a2184) Thanks [@silveltman](https://github.com/silveltman)! - Access tokens now last 15 minutes; the help of `fulldev logout` says so.
+
 ## 0.3.0
 
 ### Minor Changes
