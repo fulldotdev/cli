@@ -1,6 +1,6 @@
 import { OAuthError, ProtocolError } from "@modelcontextprotocol/client"
 
-import type { Target } from "./products.ts"
+import type { Target } from "./apps.ts"
 
 export const exitCodes = {
   ok: 0,
@@ -34,12 +34,12 @@ export class UsageError extends CliError {
 /** A command needs a sign-in that it may not start itself. */
 export class SignInRequiredError extends CliError {
   constructor(readonly target: Target) {
-    const command = `fulldev login ${target.name}${target.urlFromFlag ? ` --url ${target.url}` : ""}`
+    const command = `fulldev login${target.urlFromFlag ? ` --url ${target.url}` : ""}`
     super(
       "SIGN_IN_REQUIRED",
       `Not signed in to ${target.title}. Run: ${command}`,
       exitCodes.signIn,
-      { product: target.name, server: target.url, command },
+      { server: target.url, command },
     )
     this.name = "SignInRequiredError"
   }
@@ -50,7 +50,7 @@ export function isSignInRequired(error: unknown): error is SignInRequiredError {
 }
 
 /** The first error in the cause chain that is an instance of `type`. */
-export function findCause<T extends Error>(
+function findCause<T extends Error>(
   error: unknown,
   type: abstract new (...args: Array<never>) => T,
 ): T | undefined {

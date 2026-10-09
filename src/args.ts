@@ -2,25 +2,36 @@ import { parseArgs } from "node:util"
 
 import { UsageError } from "./errors.ts"
 import {
-  findProduct,
-  products,
+  apps,
+  findApp,
   resolveTarget,
+  server,
+  toolName,
   urlVariable,
-} from "./products.ts"
-import type { Product, Target } from "./products.ts"
+} from "./apps.ts"
+import type { App, Target } from "./apps.ts"
 
 export type Command =
   | { kind: "help"; topic: string }
   | { kind: "version" }
-  | { kind: "login"; targets: Array<Target>; browser: boolean }
-  | { kind: "logout"; targets: Array<Target> }
-  | { kind: "status"; targets: Array<Target> }
-  | { kind: "instructions"; target: Target; session: Session }
-  | { kind: "tools"; target: Target; session: Session; name?: string }
+  | { kind: "login"; target: Target; browser: boolean }
+  | { kind: "logout"; target: Target }
+  | { kind: "status"; target: Target }
+  /** With an app: the overview and that app's own instructions. */
+  | { kind: "instructions"; target: Target; session: Session; app?: App }
+  /** With an app: only its tools; `name` may leave out its prefix. */
+  | {
+      kind: "tools"
+      target: Target
+      session: Session
+      app?: App
+      name?: string
+    }
   | {
       kind: "call"
       target: Target
       session: Session
+      /** The tool's full name on the server. */
       tool: string
       json?: string
       file?: string
@@ -29,12 +40,13 @@ export type Command =
       kind: "form-wait"
       target: Target
       session: Session
+      app: App
       branchId: string
       formId: string
       timeoutMinutes: number
     }
 
-/** How a product command may sign in when it needs to. */
+/** How a command may sign in when it needs to. */
 export interface Session {
   login: boolean
   browser: boolean
@@ -51,32 +63,59 @@ interface Topic {
 
 const rootCommands: Record<string, Topic> = {
   login: {
-    usage: "fulldev login [product...] [--no-browser] [--url <mcp url>]",
-    summary: "Sign in (all products by default)",
+    usage: "fulldev login [--no-browser] [--url <mcp url>]",
+    summary: "Sign in, once for every app",
     options: ["browser", "url"],
-    details: `Signs in to each product in turn in your browser, where you choose your
-organization. Each product gets its own tokens; the browser session is shared,
-so after the first product the others are quick. Run fulldev login <product>
-again to switch that product to another organization.`,
+    details: `Signs in to the Fulldev MCP server in your browser, where you choose your
+organization when you are in more than one. One sign-in covers every app
+the organization gives you. Run fulldev login again to switch organization.
+
+With --no-browser, open the link in a browser on any computer. When that is
+another computer, as over SSH, the page after sign-in does not load: copy its
+address from the address bar and paste it into this terminal.`,
   },
   logout: {
-    usage: "fulldev logout [product...] [--url <mcp url>]",
-    summary: "Sign out and revoke the tokens (all products by default)",
+    usage: "fulldev logout [--url <mcp url>]",
+    summary: "Sign out and revoke the tokens",
     options: ["url"],
-    details: `Revokes the product's refresh token at the authorization server and deletes
-the tokens from this computer. The access token cannot be revoked and expires
-within a day. When revoking fails, the local sign-out still happens and the
-result says so.`,
+    details: `Revokes the refresh token at the authorization server and deletes the
+tokens from this computer. The access token cannot be revoked and expires
+within 15 minutes. When revoking fails, the local sign-out still happens and
+the result says so.`,
   },
   status: {
-    usage: "fulldev status [product...] [--url <mcp url>]",
-    summary: "Show the sign-in of each product",
+    usage: "fulldev status [--url <mcp url>]",
+    summary: "Show the sign-in",
     options: ["url"],
-    details: `Prints, per product, whether you are signed in, whether the sign-in still
-works, your email, organization and when the access token expires, and where
-the tokens are stored. Exits with 3 when none of the listed products can be
-used, and with 1 when a server could not be reached to check it. Read each
-product's signedIn and valid to see which one needs fulldev login.`,
+    details: `Prints whether you are signed in, whether the sign-in still works, your
+email, organization and when the access token expires, and where the tokens
+are stored. Exits with 3 when a sign-in is needed, and with 1 when the
+server could not be reached to check it.`,
+  },
+  instructions: {
+    usage: "fulldev instructions",
+    summary:
+      "The instructions for agents, of every app you may use; read first",
+    options: ["url", "login", "browser"],
+    details: `Prints the instructions the server sends, as plain text: an overview, then
+each app's own, under its name. fulldev <app> instructions prints the
+overview and that app's part.`,
+  },
+  tools: {
+    usage: "fulldev tools [name]",
+    summary: "List the tools of every app you may use, or show one tool",
+    options: ["url", "login", "browser"],
+    details: `Without a name: the name, title and first line of the description of each
+tool. With a name: its description, input schema, output schema and
+annotations. Each app's tools start with its name, such as cms_.`,
+  },
+  call: {
+    usage: "fulldev call <tool> [json | -] [--file <path>]",
+    summary: "Call a tool with a JSON object",
+    options: ["file", "url", "login", "browser"],
+    details: `The tool's input is a JSON object: the argument, a file with --file, or
+stdin with -. Without input it sends {}. Prints the tool's result as JSON on
+stdout. When the tool fails, prints its error on stderr and exits with 1.`,
   },
   help: {
     usage: "fulldev help [command...]",
@@ -84,48 +123,52 @@ product's signedIn and valid to see which one needs fulldev login.`,
   },
 }
 
-const productCommands: Record<string, Topic> = {
+/** The commands that use the server, also per app. */
+const serverCommands = ["instructions", "tools", "call"] as const
+
+const appCommands: Record<string, Topic> = {
   instructions: {
-    usage: "fulldev <product> instructions",
-    summary: "The product's instructions for agents; read them first",
+    usage: "fulldev <app> instructions",
+    summary: "The overview and the app's own instructions; read first",
     options: ["url", "login", "browser"],
-    details: "Prints the instructions the server sends, as plain text.",
+    details: "Prints them as plain text, as the server sends them.",
   },
   tools: {
-    usage: "fulldev <product> tools [name]",
-    summary: "List the tools, or show one tool",
+    usage: "fulldev <app> tools [name]",
+    summary: "List the app's tools, or show one tool",
     options: ["url", "login", "browser"],
     details: `Without a name: the name, title and first line of the description of each
-tool. With a name: its description, input schema, output schema and
-annotations.`,
+of the app's tools. With a name, with or without the app's prefix: its
+description, input schema, output schema and annotations.`,
   },
   call: {
-    usage: "fulldev <product> call <tool> [json | -] [--file <path>]",
-    summary: "Call a tool with a JSON object",
+    usage: "fulldev <app> call <tool> [json | -] [--file <path>]",
+    summary: "Call one of the app's tools with a JSON object",
     options: ["file", "url", "login", "browser"],
-    details: `The tool's input is a JSON object: the argument, a file with --file, or
-stdin with -. Without input it sends {}. Prints the tool's result as JSON on
-stdout. When the tool fails, prints its error on stderr and exits with 1.`,
+    details: `The tool's name may leave out the app's prefix: fulldev cms call
+list_repositories calls cms_list_repositories. Its input is a JSON object:
+the argument, a file with --file, or stdin with -. Without input it sends
+{}. Prints the tool's result as JSON on stdout. When the tool fails, prints
+its error on stderr and exits with 1.`,
   },
 }
 
 const formWait: Topic = {
-  usage:
-    "fulldev <product> form wait <branchId> <formId> [--timeout <minutes>]",
+  usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>]",
   summary: "Wait until the person sends a form",
   options: ["timeout", "url", "login", "browser"],
-  details: `Calls wait_for_form until the person sends the form, with a progress line on
-stderr each round, then prints the result. After --timeout minutes (default
-30) it prints the form id and exits with 2, so you can run it again.`,
+  details: `Calls cms_wait_for_form until the person sends the form, with a progress
+line on stderr each round, then prints the result. After --timeout minutes
+(default 30) it prints the form id and exits with 2, so you can run it again.`,
 }
 
 const optionHelp: Record<Option, string> = {
-  url: "--url <mcp url>      Use another server for the product, such as a deploy preview",
+  url: "--url <mcp url>      Use another server, such as a deploy preview's",
   file: "-f, --file <path>    Read the tool's JSON input from a file",
   timeout: "--timeout <minutes>  How long to wait (default 30)",
   login: "--no-login           Fail with exit code 3 instead of signing in",
   browser:
-    "--no-browser         Print the sign-in link without opening a browser",
+    "--no-browser         Print the sign-in link, for a browser here or elsewhere",
 }
 
 const footer = `Data is JSON on stdout; progress lines go to stderr. Every error is one JSON
@@ -135,46 +178,54 @@ Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage err
 
 const pad = (text: string, width: number) => text.padEnd(width)
 
-function productTopics(product: Product): Record<string, Topic> {
+function appTopics(app: App): Record<string, Topic> {
   const name = (topic: Topic): Topic => ({
     ...topic,
-    usage: topic.usage.replace("<product>", product.name),
+    usage: topic.usage.replace("<app>", app.name),
   })
   const topics: Record<string, Topic> = {}
-  for (const [command, topic] of Object.entries(productCommands))
-    topics[`${product.name} ${command}`] = name(topic)
-  if (product.forms) {
+  for (const [command, topic] of Object.entries(appCommands))
+    topics[`${app.name} ${command}`] = name(topic)
+  if (app.forms) {
     const wait = name(formWait)
-    topics[`${product.name} form`] = wait
-    topics[`${product.name} form wait`] = wait
+    topics[`${app.name} form`] = wait
+    topics[`${app.name} form wait`] = wait
   }
   return topics
 }
 
+const serverLine = `Server: ${server.url} (${urlVariable} or --url overrides it)`
+
 function rootHelp() {
-  const width = Math.max(...products.map((product) => product.name.length)) + 4
-  return `Fulldev CLI: use Fulldev products from a terminal or an AI agent.
+  const width = Math.max(...apps.map((app) => app.name.length)) + 4
+  return `Fulldev CLI: use Fulldev apps from a terminal or an AI agent, through the
+Fulldev MCP server. One sign-in covers every app your organization gives you.
 
 Usage:
-  fulldev <product> <command> [options]
+  fulldev <command> [options]
+  fulldev <app> <command> [options]
+
+Commands:
 ${Object.values(rootCommands)
   .map((topic) => `  ${pad(topic.usage.split(" [--")[0]!, 32)}${topic.summary}`)
   .join("\n")}
 
-Products:
-${products.map((product) => `  ${pad(product.name, width)}${product.description}`).join("\n")}
+Apps (their tools start with the app's name, such as cms_):
+${apps.map((app) => `  ${pad(app.name, width)}${app.description}`).join("\n")}
 
-Product commands:
+App commands, for one app's part:
 ${[
-  ...Object.values(productCommands),
-  { ...formWait, usage: formWait.usage.replace("<product>", "cms") },
+  ...Object.values(appCommands),
+  { ...formWait, usage: formWait.usage.replace("<app>", "cms") },
 ]
   .map((topic) => `  ${topic.usage.split(" [--")[0]}\n      ${topic.summary}`)
   .join("\n")}
 
-Run fulldev <product> instructions first and follow them.
+Run fulldev instructions first and follow them.
 Run fulldev help <command...> for a command's options, for example
 fulldev help cms call.
+
+${serverLine}
 
 Options:
   -h, --help     Show help
@@ -183,21 +234,23 @@ Options:
 ${footer}`
 }
 
-function productHelp(product: Product) {
-  const topics = Object.values(productTopics(product)).filter(
+function appHelp(app: App) {
+  const topics = Object.values(appTopics(app)).filter(
     (topic, index, all) => all.indexOf(topic) === index,
   )
-  return `${product.title}
+  return `${app.title}
 
-${product.description}
+${app.description}
 
-Server: ${product.url} (${urlVariable(product)} or --url overrides it)
+Its tools start with ${app.name}_; after fulldev ${app.name} you may leave that out.
 
 Usage:
 ${topics.map((topic) => `  ${topic.usage}\n      ${topic.summary}`).join("\n")}
 
-Run fulldev ${product.name} instructions first and follow them.
-Sign in with fulldev login ${product.name}.
+Run fulldev ${app.name} instructions first and follow them.
+Sign in with fulldev login, once for every app.
+
+${serverLine}
 
 ${footer}`
 }
@@ -216,11 +269,11 @@ export function helpText(topic: string): string | undefined {
   if (topic === "") return rootHelp()
   const root = rootCommands[topic]
   if (root) return topicHelp(root)
-  const product = findProduct(topic)
-  if (product) return productHelp(product)
+  const app = findApp(topic)
+  if (app) return appHelp(app)
   const [name] = topic.split(" ")
-  const owner = findProduct(name ?? "")
-  const found = owner ? productTopics(owner)[topic] : undefined
+  const owner = findApp(name ?? "")
+  const found = owner ? appTopics(owner)[topic] : undefined
   return found ? topicHelp(found) : undefined
 }
 
@@ -288,75 +341,64 @@ export function parseCommandLine(
       )
   }
 
-  if (first === "login" || first === "logout" || first === "status") {
-    allow(first, rootCommands[first]!.options)
-    const named = [...new Set(rest)].map((name) => {
-      const product = findProduct(name)
-      if (!product)
-        throw new UsageError(`Unknown product: ${name}`, helpFor(first))
-      return product
-    })
-    if (values.url !== undefined && named.length !== 1)
-      throw new UsageError(
-        `--url needs exactly one product, for example fulldev ${first} cms --url <mcp url>.`,
-        helpFor(first),
-      )
-    const targets = (named.length ? named : products).map((product) =>
-      resolveTarget(product, values.url, env),
-    )
-    if (first === "login")
-      return {
-        kind: "login",
-        targets,
-        browser: values.browser ?? true,
-      }
-    return { kind: first, targets }
-  }
-
-  const product = findProduct(first)
-  if (!product) throw new UsageError(`Unknown command or product: ${first}`)
-  const [command, ...args] = rest
-  if (command === undefined) {
-    allow(product.name)
-    return { kind: "help", topic: product.name }
-  }
-  const topic = `${product.name} ${command}`
-  const topics = productTopics(product)
-  const known = topics[topic]
-  if (!known)
-    throw new UsageError(
-      `Unknown command: fulldev ${topic}`,
-      helpFor(product.name),
-    )
-  allow(topic, known.options)
-  const usage = (count: boolean) => {
-    if (!count) throw new UsageError(`Usage: ${known.usage}`, helpFor(topic))
-  }
-  const target = resolveTarget(product, values.url, env)
+  const target = resolveTarget(values.url, env)
   const session: Session = {
     login: values.login ?? true,
     browser: values.browser ?? true,
   }
 
+  if (first === "login" || first === "logout" || first === "status") {
+    allow(first, rootCommands[first]!.options)
+    if (rest.length)
+      throw new UsageError(
+        `fulldev ${first} takes no app: one sign-in covers every app.`,
+        helpFor(first),
+      )
+    if (first === "login")
+      return { kind: "login", target, browser: values.browser ?? true }
+    return { kind: first, target }
+  }
+
+  const app = findApp(first)
+  const command = app ? rest[0] : first
+  const args = app ? rest.slice(1) : rest
+  if (!app && !(serverCommands as ReadonlyArray<string>).includes(first))
+    throw new UsageError(`Unknown command or app: ${first}`)
+  if (app && command === undefined) {
+    allow(app.name)
+    return { kind: "help", topic: app.name }
+  }
+  const topic = app ? `${app.name} ${command}` : first
+  const known = app ? appTopics(app)[topic] : rootCommands[topic]
+  if (!known)
+    throw new UsageError(
+      `Unknown command: fulldev ${topic}`,
+      helpFor(app?.name ?? ""),
+    )
+  allow(topic, known.options)
+  const usage = (count: boolean) => {
+    if (!count) throw new UsageError(`Usage: ${known.usage}`, helpFor(topic))
+  }
+
   switch (command) {
     case "instructions":
       usage(args.length === 0)
-      return { kind: "instructions", target, session }
+      return { kind: "instructions", target, session, app }
     case "tools":
       usage(args.length <= 1)
-      return { kind: "tools", target, session, name: args[0] }
+      return { kind: "tools", target, session, app, name: args[0] }
     case "call":
       usage(args.length === 1 || args.length === 2)
       return {
         kind: "call",
         target,
         session,
-        tool: args[0]!,
+        tool: app ? toolName(app, args[0]!) : args[0]!,
         json: args[1],
         file: values.file,
       }
     default: {
-      usage(args[0] === "wait" && args.length === 3)
+      usage(app !== undefined && args[0] === "wait" && args.length === 3)
       const timeoutMinutes =
         values.timeout === undefined ? 30 : Number(values.timeout)
       if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0)
@@ -368,6 +410,7 @@ export function parseCommandLine(
         kind: "form-wait",
         target,
         session,
+        app: app!,
         branchId: args[1]!,
         formId: args[2]!,
         timeoutMinutes,

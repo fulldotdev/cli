@@ -4,8 +4,8 @@ import type { CallToolResult } from "@modelcontextprotocol/client"
 import { isSignInRequired } from "./errors.ts"
 import { toolError, toolOutput } from "./result.ts"
 
-/** The one tool the CLI names itself. */
-export const waitTool = "wait_for_form"
+/** The one tool the CLI names itself, without its app's prefix. */
+const waitTool = "wait_for_form"
 
 export type CallTool = (
   name: string,
@@ -17,8 +17,8 @@ export interface FormWaitOptions {
   branchId: string
   formId: string
   timeoutMs: number
-  /** The product name, for the command that resumes the wait. */
-  product?: string
+  /** The app name, for the command that resumes the wait. */
+  app?: string
   progress?: (line: string) => void
   now?: () => number
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>
@@ -61,7 +61,7 @@ export async function waitForForm(
     branchId,
     formId,
     timeoutMs,
-    product = "cms",
+    app = "cms",
     progress = () => {},
     now = Date.now,
     sleep = wait,
@@ -77,7 +77,11 @@ export async function waitForForm(
     for (let round = 1; now() < deadline && !aborted(); round++) {
       let result: CallToolResult
       try {
-        result = await callTool(waitTool, { branchId, formId }, signal)
+        result = await callTool(
+          `${app}_${waitTool}`,
+          { branchId, formId },
+          signal,
+        )
         failures = 0
       } catch (error) {
         if (aborted()) break
@@ -111,7 +115,7 @@ export async function waitForForm(
       waiting: true,
       branchId,
       formId,
-      message: `Stopped waiting after ${minutes(timeoutMs)}. Run fulldev ${product} form wait ${branchId} ${formId} to keep waiting, or continue when the person says they are done.`,
+      message: `Stopped waiting after ${minutes(timeoutMs)}. Run fulldev ${app} form wait ${branchId} ${formId} to keep waiting, or continue when the person says they are done.`,
     },
   }
 }

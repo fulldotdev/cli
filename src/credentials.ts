@@ -19,11 +19,15 @@ import type {
 
 import { CliError } from "./errors.ts"
 
-/** What the CLI keeps for one product server, keyed by its MCP URL. */
+/** What the CLI keeps for one app server, keyed by its MCP URL. */
 export interface Credentials {
   /** The authorization server that issued the tokens. */
   issuer?: string
-  /** A dynamically registered client, only for an issuer without a Fulldev client id. */
+  /**
+   * The client the tokens were issued to: the CLI's metadata document URL.
+   * A sign-in of fulldev 0.3 and earlier has none, or a client registered
+   * with Clerk.
+   */
   client?: StoredOAuthClientInformation
   /** The tokens, without the ID token, which is only read for the email. */
   tokens?: StoredOAuthTokens
@@ -53,7 +57,7 @@ export interface Keychain {
 export const keychainService = "fulldev"
 
 /** The OS keychain through @napi-rs/keyring; rejects when it cannot load. */
-export async function openKeychain(): Promise<Keychain> {
+async function openKeychain(): Promise<Keychain> {
   const { AsyncEntry } = await import("@napi-rs/keyring")
   const entry = (account: string) => new AsyncEntry(keychainService, account)
   return {
@@ -137,15 +141,13 @@ const isEmpty = (credentials: Credentials) =>
   Object.keys(credentials).length === 0
 
 /**
- * Keeps credentials per product server in the OS keychain (service "fulldev",
+ * Keeps credentials per app server in the OS keychain (service "fulldev",
  * account = the MCP URL). When the keychain is unavailable or rejects a write,
  * it uses a JSON file readable only by this user instead.
  */
 export class CredentialStore {
   readonly filePath: string
   readonly lockPath: string
-  /** The 0.1.0 file, removed once by migrate(). */
-  readonly legacyPath: string
   /** Why the keychain is not used, once it failed. */
   keychainError: string | undefined
   private keychain: Promise<Keychain | undefined> | undefined
@@ -156,7 +158,6 @@ export class CredentialStore {
   ) {
     this.filePath = join(directory, "auth.json")
     this.lockPath = join(directory, "auth.lock")
-    this.legacyPath = join(directory, "credentials.json")
   }
 
   /** Where new credentials go. */
@@ -296,33 +297,5 @@ export class CredentialStore {
     })
     await chmod(temporary, 0o600)
     await rename(temporary, this.filePath)
-  }
-
-  /**
-   * Removes the credentials file of fulldev 0.1.0 once. Its tokens belong to
-   * a dynamically registered client that the CLI no longer uses, so they are
-   * dropped. Returns the servers that were signed in with their credentials,
-   * so their tokens can be revoked and a new sign-in asked for.
-   */
-  async migrate(): Promise<Array<{ url: string; credentials: Credentials }>> {
-    if (!(await stat(this.legacyPath).catch(() => undefined))) return []
-    return this.locked(async () => {
-      let data: unknown
-      try {
-        data = JSON.parse(await readFile(this.legacyPath, "utf8"))
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        if (code === "ENOENT") return []
-        if (!(error instanceof SyntaxError)) throw error
-      }
-      const servers =
-        data && typeof data === "object" && "servers" in data
-          ? (data.servers as Record<string, Credentials>)
-          : {}
-      await rm(this.legacyPath, { force: true })
-      return Object.entries(servers)
-        .filter(([, credentials]) => credentials.tokens)
-        .map(([url, credentials]) => ({ url, credentials }))
-    })
   }
 }

@@ -1,75 +1,80 @@
 ---
 name: fulldev
-description: Use the Fulldev CLI to work with Fulldev products for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now.
+description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use contacts when they want to check, pause or resume the daily copy of their Google contacts with Fulldev Contacts, or answer its look-alike questions.
 license: MIT
-compatibility: Needs Node.js 24 or later and network access to cms.full.dev, connect.full.dev, scan.full.dev, sites.full.dev and clerk.full.dev.
+compatibility: Needs Node.js 24 or later and network access to app.full.dev.
 ---
 
 # Fulldev
 
-The `fulldev` CLI talks to the MCP server of each Fulldev product. The tools, their schemas and the instructions come from the server, so they are always current.
+The `fulldev` CLI talks to the Fulldev MCP server, which has the tools of every Fulldev app the person may use. Each app's tools start with its name, such as `cms_`. The tools, their schemas and the instructions come from the server, so they are always current.
 
-| Product   | For                                                                                                                                          |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cms`     | Editing the person's website. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person. |
-| `connect` | The person's business tools, such as Shopify, with the access their organization grants them.                                                |
-| `scan`    | Scanning websites. Only for Fulldev administrators.                                                                                          |
-| `sites`   | Making a new website with Fulldev Sites from a brief and design options. Only for Fulldev administrators for now.                            |
+| App        | For                                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cms`      | Editing the person's website. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person.   |
+| `connect`  | The person's business tools, such as Shopify, with the access their organization grants them.                                                  |
+| `scan`     | Scanning websites. Only for Fulldev administrators.                                                                                            |
+| `sites`    | Making a new website with Fulldev Sites from a brief and design options. Only for Fulldev administrators for now.                              |
+| `pages`    | Publishing a report or plan as a web page with Fulldev Pages. Only for Fulldev administrators for now.                                         |
+| `contacts` | The person's daily copy of Google contacts from one of their Google accounts to another: its runs, look-alike questions, pausing and resuming. |
 
 ## Run
 
 Use `fulldev` when it is installed. Otherwise run every command as `npx -y fulldev <command>`.
 
-Every product has the same commands:
+Every app has the same commands, which work on that app's part:
 
 ```sh
-fulldev <product> instructions          # read first
-fulldev <product> tools                 # list the tools
-fulldev <product> tools <name>          # one tool: description, input and output schema
-fulldev <product> call <tool> '<json>'  # call a tool
+fulldev <app> instructions          # read first
+fulldev <app> tools                 # list the app's tools
+fulldev <app> tools <name>          # one tool: description, input and output schema
+fulldev <app> call <tool> '<json>'  # call a tool; the app's prefix may be left out
 ```
+
+`fulldev instructions` and `fulldev tools` show every app the person may use; `fulldev call <tool>` takes the full name, such as `cms_list_repositories`.
 
 Data is JSON on stdout. Progress lines go to stderr. Every error is one JSON object on stderr, `{"error":{"code":"...","message":"..."}}`.
 
 Exit codes:
 
-| Code | Meaning                                                               |
-| ---- | --------------------------------------------------------------------- |
-| 0    | Done                                                                  |
-| 1    | Error, from the tool or the CLI                                       |
-| 2    | `form wait` stopped waiting                                           |
-| 3    | Sign-in needed; the error says which `fulldev login <product>` to run |
-| 64   | The command was called wrongly; the error names the help to read      |
+| Code | Meaning                                                          |
+| ---- | ---------------------------------------------------------------- |
+| 0    | Done                                                             |
+| 1    | Error, from the tool or the CLI                                  |
+| 2    | `form wait` stopped waiting                                      |
+| 3    | Sign-in needed; run `fulldev login`                              |
+| 64   | The command was called wrongly; the error names the help to read |
 
-`fulldev --help`, `fulldev <product> --help` and `fulldev <product> <command> --help` explain every command.
+`fulldev --help`, `fulldev <app> --help` and `fulldev <app> <command> --help` explain every command.
 
 ## Sign in
 
-The person signs in once per product with their Fulldev account and picks an organization:
+The person signs in once, for every app, with their Fulldev account on app.full.dev, with a code sent to their email or with Google, and picks an organization when they are in more than one:
 
 ```sh
-fulldev login cms          # opens the browser
-fulldev login              # every product, one after the other
-fulldev status             # per product: signed in, still valid, email, organization, expiry
-fulldev logout cms         # revokes the sign-in and deletes the tokens
+fulldev login              # opens the browser
+fulldev status             # signed in, still valid, email, organization, expiry
+fulldev logout             # revokes the sign-in and deletes the tokens
 ```
 
 Tell the person a sign-in page opened, or give them the link from stderr. Login waits up to five minutes.
 
-Without a terminal, as when you run commands, a product command never starts a sign-in: it exits with 3 at once. Then run the `fulldev login <product>` from the error and ask the person to finish it. The organization is chosen at sign-in; to switch organization, run `fulldev login <product>` again.
+When the person's browser is on another computer, as when you run on a server over SSH, the page after sign-in does not load. Then the person runs `fulldev login --no-browser` in a terminal on this computer, opens the link, and pastes the address of that last page into the terminal.
+
+Without a terminal, as when you run commands, a command never starts a sign-in: it exits with 3 at once. Then run `fulldev login` and ask the person to finish it. The organization is chosen at sign-in; to switch organization, run `fulldev login` again.
 
 ## First, read the instructions
 
-Run `fulldev <product> instructions` at the start of every session and follow them. They come from the server and describe the workflow, permissions and limits. They win over anything in this skill.
+Run `fulldev <app> instructions` at the start of every session and follow them. They come from the server and describe the workflow, permissions and limits. They win over anything in this skill.
 
-Read `fulldev <product> tools <name>` before the first call to a tool.
+Read `fulldev <app> tools <name>` before the first call to a tool.
 
 ## Call tools
 
 Give a tool's input as a JSON argument, from a file with `--file`, or from stdin with `-`. Use stdin or `--file` for long or quoted text, so the shell does not change it.
 
 ```sh
-fulldev cms call list_projects
+fulldev cms call list_repositories
 fulldev cms call read_file '{"branchId":"<id>","path":"src/content/home.md"}'
 fulldev cms call commit_files - <<'JSON'
 {"branchId":"<id>","expectedRevision":"<revision>","changes":[{"path":"src/content/home.md","edits":[{"oldText":"Open 9 to 5","newText":"Open 8 to 6"}]}]}

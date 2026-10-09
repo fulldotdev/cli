@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test"
 
 import { waitForForm } from "./form-wait.ts"
 import { SignInRequiredError } from "./errors.ts"
-import { findProduct } from "./products.ts"
+import { server } from "./apps.ts"
 
 const branchId = "11111111-1111-4111-8111-111111111111"
 const formId = "22222222-2222-4222-8222-222222222222"
@@ -39,7 +39,7 @@ function setup(results: Array<CallToolResult | Error>) {
 }
 
 describe("waitForForm", () => {
-  it("calls wait_for_form until waiting is false", async () => {
+  it("calls cms_wait_for_form until waiting is false", async () => {
     const answers = { waiting: false, formId, answers: { title: "New" } }
     const { callTool, progress, options } = setup([
       structured({ waiting: true, formId }),
@@ -52,7 +52,7 @@ describe("waitForForm", () => {
     })
     expect(callTool).toHaveBeenCalledTimes(3)
     expect(callTool).toHaveBeenCalledWith(
-      "wait_for_form",
+      "cms_wait_for_form",
       { branchId, formId },
       expect.any(AbortSignal),
     )
@@ -100,7 +100,7 @@ describe("waitForForm", () => {
       branchId,
       formId,
       timeoutMs: 50,
-      product: "cms",
+      app: "cms",
     })
     expect(aborted).toBe(true)
     expect(Date.now() - started).toBeLessThan(1000)
@@ -153,11 +153,8 @@ describe("waitForForm", () => {
   })
 
   it.each([
-    new SignInRequiredError({
-      ...findProduct("cms")!,
-      urlFromFlag: false,
-    }),
-    new ProtocolError(-32602, "Tool wait_for_form not found"),
+    new SignInRequiredError({ ...server, urlFromFlag: false }),
+    new ProtocolError(-32602, "Tool cms_wait_for_form not found"),
   ])("does not retry %s", async (error) => {
     const { callTool, options } = setup([error])
     await expect(waitForForm(callTool, options)).rejects.toBe(error)
