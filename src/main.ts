@@ -13,6 +13,7 @@ import type { CredentialStore } from "./credentials.ts"
 import {
   CliError,
   SignInRequiredError,
+  UsageError,
   describeError,
   exitCodes,
   isSignInRequired,
@@ -22,7 +23,6 @@ import { readToolArguments } from "./input.ts"
 import {
   StoredTokenAuth,
   browserLogin,
-  claims,
   expiresAt,
   revokeTokens,
 } from "./oauth.ts"
@@ -117,6 +117,30 @@ async function listTools(client: Client) {
   return tools
 }
 
+/** The server's own tool that lists the organizations of the sign-in. */
+const organizationsTool = "fulldev_list_organizations"
+
+interface Organization {
+  id: string
+  slug: string
+  name: string
+  apps: Array<string>
+}
+
+/** The organizations of the sign-in, with the apps the person may use in each. */
+async function listOrganizations(client: Client) {
+  const result = await client.callTool(
+    { name: organizationsTool, arguments: {} },
+    { timeout: requestTimeoutMs },
+  )
+  if (result.isError)
+    throw new CliError("ERROR", JSON.stringify(toolError(result)))
+  const { organizations } = toolOutput(result) as {
+    organizations?: Array<Organization>
+  }
+  return organizations ?? []
+}
+
 /** The sign-in, and whether the server still accepts it. */
 async function signInStatus(target: Target, io: Io) {
   const { credentials, storage } = await io.store.read(target.url)
@@ -125,9 +149,16 @@ async function signInStatus(target: Target, io: Io) {
   // valid: the server accepts the sign-in; unknown (with error) when it could not be checked.
   let valid: boolean | undefined = true
   let error: string | undefined
+  let organizations: Array<Organization> | undefined
   try {
     const client = await connect(target, io)
-    await client.close().catch(() => {})
+    try {
+      organizations = await listOrganizations(client)
+    } catch (cause) {
+      error = `The organizations could not be listed: ${(cause as Error).message}`
+    } finally {
+      await client.close().catch(() => {})
+    }
   } catch (cause) {
     if (isSignInRequired(cause)) valid = false
     else {
@@ -136,7 +167,6 @@ async function signInStatus(target: Target, io: Io) {
     }
   }
   const current = await io.store.get(target.url)
-  const access = claims(current.tokens?.access_token)
   const expires = expiresAt(current)
   return {
     ...base,
@@ -144,7 +174,11 @@ async function signInStatus(target: Target, io: Io) {
     valid,
     ...(error ? { error } : {}),
     email: current.email,
-    organizationId: access.org_id,
+    organizations: organizations?.map(({ slug, name, apps }) => ({
+      slug,
+      name,
+      apps,
+    })),
     expiresAt: expires ? new Date(expires).toISOString() : undefined,
     storage,
   }
@@ -206,9 +240,68 @@ export function instructionsFor(text: string, app: App) {
   if (!own)
     throw new CliError(
       "APP_NOT_AVAILABLE",
-      `${app.title} is not among your apps in this organization. Run fulldev instructions for the apps you may use, or fulldev login to choose another organization.`,
+      `${app.title} is not among your apps in the organizations of this sign-in. Run fulldev status for the apps you may use in each, or fulldev login to choose other organizations.`,
     )
   return `${overview.trimEnd()}\n\n${own.trim()}`
+}
+
+/**
+ * Calls a tool that only reads once in every organization of the sign-in
+ * whose apps include the tool's app, and prints every answer together.
+ */
+async function callInEvery(
+  command: Extract<Command, { kind: "call" }>,
+  args: Record<string, unknown>,
+  io: Io,
+) {
+  const answers = await withClient(
+    command.target,
+    command.session,
+    io,
+    async (client) => {
+      const tool = (await listTools(client)).find(
+        ({ name }) => name === command.tool,
+      )
+      if (!tool)
+        throw new CliError(
+          "NOT_FOUND",
+          `You have no tool named ${command.tool}. Run fulldev tools for the list.`,
+        )
+      if (tool.annotations?.readOnlyHint !== true)
+        throw new UsageError(
+          `--all-orgs calls only tools that only read, and ${command.tool} changes data. Name one organization with --org.`,
+          "fulldev help call",
+        )
+      const app = command.tool.split("_")[0]!
+      const organizations = (await listOrganizations(client)).filter(
+        ({ apps }) => apps.includes(app),
+      )
+      return Promise.all(
+        organizations.map(async ({ slug, name }) => {
+          const organization = { slug, name }
+          try {
+            const result = await client.callTool(
+              {
+                name: command.tool,
+                arguments: { ...args, organization: slug },
+              },
+              { timeout: requestTimeoutMs },
+            )
+            return result.isError
+              ? { organization, ...toolError(result) }
+              : { organization, result: toolOutput(result) }
+          } catch (error) {
+            if (isSignInRequired(error)) throw error
+            return { organization, ...describeError(error).body }
+          }
+        }),
+      )
+    },
+  )
+  io.stdout(json({ organizations: answers }))
+  return answers.some((answer) => "error" in answer)
+    ? exitCodes.error
+    : exitCodes.ok
 }
 
 async function run(command: Command, io: Io): Promise<number> {
@@ -301,6 +394,9 @@ async function run(command: Command, io: Io): Promise<number> {
         json: command.json,
         file: command.file,
       })
+      if (command.allOrganizations) return callInEvery(command, args, io)
+      if (command.organization !== undefined)
+        args.organization = command.organization
       const result = await withClient(
         command.target,
         command.session,
@@ -327,7 +423,13 @@ async function run(command: Command, io: Io): Promise<number> {
           waitForForm(
             (name, args, signal) =>
               client.callTool(
-                { name, arguments: args },
+                {
+                  name,
+                  arguments:
+                    command.organization === undefined
+                      ? args
+                      : { ...args, organization: command.organization },
+                },
                 { timeout: requestTimeoutMs, signal },
               ),
             {

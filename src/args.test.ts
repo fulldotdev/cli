@@ -73,6 +73,34 @@ describe("parseCommandLine", () => {
     ).toMatchObject({ timeoutMinutes: 30 })
   })
 
+  it("reads the organization of a call or a form wait", () => {
+    expect(
+      parseCommandLine(
+        ["cms", "call", "list_repositories", "--org", "clubhuis"],
+        {},
+      ),
+    ).toMatchObject({ kind: "call", organization: "clubhuis" })
+    expect(
+      parseCommandLine(["call", "cms_list_repositories", "--all-orgs"], {}),
+    ).toMatchObject({ kind: "call", allOrganizations: true })
+    expect(
+      parseCommandLine(["cms", "form", "wait", "b", "f", "--org", "x"], {}),
+    ).toMatchObject({ kind: "form-wait", organization: "x" })
+  })
+
+  it("says to sign in without the app, which sign-ins took before", () => {
+    try {
+      parseCommandLine(["login", "contacts"], {})
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(UsageError)
+      expect((error as UsageError).message).toBe(
+        "One sign-in covers every app, Fulldev Contacts too. Run: fulldev login",
+      )
+      expect((error as UsageError).details.command).toBe("fulldev login")
+    }
+  })
+
   it("signs in, out and shows the status once, for every app", () => {
     for (const kind of ["login", "logout", "status"] as const)
       expect(parseCommandLine([kind], {})).toMatchObject({
@@ -151,6 +179,10 @@ describe("parseCommandLine", () => {
     [["cms", "tools", "--unknown"]],
     [["login", "cms"]],
     [["status", "cms"]],
+    [["cms", "call", "x", "--org", "a", "--all-orgs"]],
+    [["cms", "tools", "--org", "a"]],
+    [["cms", "instructions", "--all-orgs"]],
+    [["cms", "form", "wait", "a", "b", "--all-orgs"]],
     [["login", "--no-login"]],
     [["login", "--device"]],
     [["cms", "tools", "--url", "not a url"]],
