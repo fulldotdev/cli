@@ -311,7 +311,7 @@ var CredentialStore = class {
 };
 //#endregion
 //#region package.json
-var version = "0.4.0";
+var version = "0.5.0";
 //#endregion
 //#region src/apps.ts
 /** The Fulldev MCP server: the tools of every app the person may use. */
