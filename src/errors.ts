@@ -25,8 +25,12 @@ export class CliError extends Error {
 
 /** A mistake in how the CLI was called. */
 export class UsageError extends CliError {
-  constructor(message: string, help = "fulldev --help") {
-    super("USAGE", message, exitCodes.usage, { help })
+  constructor(
+    message: string,
+    help = "fulldev --help",
+    details: Record<string, unknown> = {},
+  ) {
+    super("USAGE", message, exitCodes.usage, { help, ...details })
     this.name = "UsageError"
   }
 }

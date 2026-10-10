@@ -36,16 +36,16 @@ npx skills add fulldotdev/cli
 ## Sign in
 
 ```sh
-fulldev login               # once, for every app
-fulldev status              # signed in, valid, email, organization, expiry
+fulldev login               # once, for every app and organization
+fulldev status              # signed in, valid, email, organizations, expiry
 fulldev logout
 ```
 
-`fulldev login` opens your browser at [app.full.dev](https://app.full.dev/sign-in), where you sign in with your Fulldev account, with a code sent to your email or with Google, and choose your organization when you are in more than one. Add `--no-browser` to only print the link.
+`fulldev login` opens your browser at [app.full.dev](https://app.full.dev/sign-in), where you sign in with your Fulldev account, with a code sent to your email or with Google, and choose the organizations fulldev may work in: all of yours at first. It waits up to 10 minutes. Add `--no-browser` to only print the link.
 
 On a computer without a browser, such as over SSH, run `fulldev login --no-browser` and open the link on your own computer. The page after sign-in does not load there, because it is meant for the computer that runs `fulldev`: copy its address from the address bar and paste it into the terminal.
 
-One sign-in covers every app the organization gives you: the tokens are for the Fulldev MCP server, which checks on every call which apps you may use. When you are in more than one organization, you choose one at every sign-in; to switch organization, run `fulldev login` again.
+One sign-in covers every app of the organizations you chose: the tokens are for the Fulldev MCP server, which checks on every call which apps you may use in which organization. To change the organizations, run `fulldev login` again. `fulldev status` lists them, with their slugs and the apps you may use in each.
 
 `fulldev logout` revokes the refresh token at the authorization server (access tokens cannot be revoked and expire within 15 minutes) and deletes the tokens from this computer. When revoking fails, for example offline, it still deletes them and says so.
 
@@ -76,6 +76,15 @@ fulldev help cms call                   # help for any command
 ```
 
 After `fulldev <app>`, a tool's name may leave out the app's prefix: `fulldev cms call read_file` calls `cms_read_file`.
+
+When the sign-in is for more than one organization, a call names the organization to work in with `--org <slug>`; without it the tool answers `ORGANIZATION_REQUIRED`. `fulldev tools` and `fulldev instructions` show the tools of every organization together. `--all-orgs` calls a tool that only reads in every organization that has its app and prints the answers together, each with its organization:
+
+```sh
+fulldev cms call list_repositories --org het-clubhuis
+fulldev cms call list_repositories --all-orgs   # {"organizations":[{"organization":{...},"result":{...}}, ...]}
+```
+
+On the server the organization is the tool's `organization` argument, which every app tool takes when the sign-in is for several; `fulldev_list_organizations` lists them.
 
 `call` prints the tool's result as JSON on stdout. When the tool fails, it prints the error on stderr and exits with 1.
 

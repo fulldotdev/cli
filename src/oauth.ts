@@ -40,7 +40,7 @@ import type { Target } from "./apps.ts"
 export const clientMetadataUrl = "https://full.dev/oauth/cli.json"
 
 /** The claims of a JWT, or {} for an opaque token. */
-export function claims(token: string | undefined): Record<string, unknown> {
+function claims(token: string | undefined): Record<string, unknown> {
   try {
     const value: unknown = JSON.parse(
       Buffer.from(token?.split(".")[1] ?? "", "base64url").toString(),
@@ -401,7 +401,8 @@ export async function browserLogin(
   {
     browser,
     log,
-    timeoutMs = 5 * 60_000,
+    // Each step of the sign-in pages is valid for 10 minutes too.
+    timeoutMs = 10 * 60_000,
     fetchFn,
     input = process.stdin,
   }: BrowserLoginOptions,

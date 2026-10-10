@@ -35,6 +35,10 @@ export type Command =
       tool: string
       json?: string
       file?: string
+      /** The organization to work in, by slug or id. */
+      organization?: string
+      /** Every organization of the sign-in that has the tool's app. */
+      allOrganizations?: boolean
     }
   | {
       kind: "form-wait"
@@ -44,6 +48,7 @@ export type Command =
       branchId: string
       formId: string
       timeoutMinutes: number
+      organization?: string
     }
 
 /** How a command may sign in when it needs to. */
@@ -52,7 +57,14 @@ export interface Session {
   browser: boolean
 }
 
-type Option = "url" | "file" | "timeout" | "login" | "browser"
+type Option =
+  | "url"
+  | "file"
+  | "timeout"
+  | "login"
+  | "browser"
+  | "org"
+  | "all-orgs"
 
 interface Topic {
   usage: string
@@ -61,14 +73,22 @@ interface Topic {
   details?: string
 }
 
+const organizationDetails = `
+When the sign-in is for more than one organization, --org names the one to
+work in, by its slug from fulldev status. --all-orgs calls a tool that only
+reads in every organization of the sign-in that has its app, and prints
+{"organizations":[{"organization","result" or "error"}]}; it exits with 1
+when one failed.`
+
 const rootCommands: Record<string, Topic> = {
   login: {
     usage: "fulldev login [--no-browser] [--url <mcp url>]",
-    summary: "Sign in, once for every app",
+    summary: "Sign in, once for every app and organization",
     options: ["browser", "url"],
-    details: `Signs in to the Fulldev MCP server in your browser, where you choose your
-organization when you are in more than one. One sign-in covers every app
-the organization gives you. Run fulldev login again to switch organization.
+    details: `Signs in to the Fulldev MCP server in your browser, where you choose the
+organizations fulldev may work in: all of yours at first. One sign-in covers
+every app they give you. Run fulldev login again to change the choice, and
+choose the organization of a call with --org.
 
 With --no-browser, open the link in a browser on any computer. When that is
 another computer, as over SSH, the page after sign-in does not load: copy its
@@ -88,8 +108,8 @@ the result says so.`,
     summary: "Show the sign-in",
     options: ["url"],
     details: `Prints whether you are signed in, whether the sign-in still works, your
-email, organization and when the access token expires, and where the tokens
-are stored. Exits with 3 when a sign-in is needed, and with 1 when the
+email, the organizations of the sign-in with their slugs and the apps you may
+use in each, when the access token expires, and where the tokens are stored. Exits with 3 when a sign-in is needed, and with 1 when the
 server could not be reached to check it.`,
   },
   instructions: {
@@ -110,12 +130,13 @@ tool. With a name: its description, input schema, output schema and
 annotations. Each app's tools start with its name, such as cms_.`,
   },
   call: {
-    usage: "fulldev call <tool> [json | -] [--file <path>]",
+    usage: "fulldev call <tool> [json | -] [--file <path>] [--org <slug>]",
     summary: "Call a tool with a JSON object",
-    options: ["file", "url", "login", "browser"],
+    options: ["file", "org", "all-orgs", "url", "login", "browser"],
     details: `The tool's input is a JSON object: the argument, a file with --file, or
 stdin with -. Without input it sends {}. Prints the tool's result as JSON on
-stdout. When the tool fails, prints its error on stderr and exits with 1.`,
+stdout. When the tool fails, prints its error on stderr and exits with 1.
+${organizationDetails}`,
   },
   help: {
     usage: "fulldev help [command...]",
@@ -142,21 +163,24 @@ of the app's tools. With a name, with or without the app's prefix: its
 description, input schema, output schema and annotations.`,
   },
   call: {
-    usage: "fulldev <app> call <tool> [json | -] [--file <path>]",
+    usage:
+      "fulldev <app> call <tool> [json | -] [--file <path>] [--org <slug>]",
     summary: "Call one of the app's tools with a JSON object",
-    options: ["file", "url", "login", "browser"],
+    options: ["file", "org", "all-orgs", "url", "login", "browser"],
     details: `The tool's name may leave out the app's prefix: fulldev cms call
 list_repositories calls cms_list_repositories. Its input is a JSON object:
 the argument, a file with --file, or stdin with -. Without input it sends
 {}. Prints the tool's result as JSON on stdout. When the tool fails, prints
-its error on stderr and exits with 1.`,
+its error on stderr and exits with 1.
+${organizationDetails}`,
   },
 }
 
 const formWait: Topic = {
-  usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>]",
+  usage:
+    "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>] [--org <slug>]",
   summary: "Wait until the person sends a form",
-  options: ["timeout", "url", "login", "browser"],
+  options: ["timeout", "org", "url", "login", "browser"],
   details: `Calls cms_wait_for_form until the person sends the form, with a progress
 line on stderr each round, then prints the result. After --timeout minutes
 (default 30) it prints the form id and exits with 2, so you can run it again.`,
@@ -169,6 +193,9 @@ const optionHelp: Record<Option, string> = {
   login: "--no-login           Fail with exit code 3 instead of signing in",
   browser:
     "--no-browser         Print the sign-in link, for a browser here or elsewhere",
+  org: "--org <slug>         The organization to work in",
+  "all-orgs":
+    "--all-orgs           Every organization of the sign-in (reading tools)",
 }
 
 const footer = `Data is JSON on stdout; progress lines go to stderr. Every error is one JSON
@@ -199,7 +226,8 @@ const serverLine = `Server: ${server.url} (${urlVariable} or --url overrides it)
 function rootHelp() {
   const width = Math.max(...apps.map((app) => app.name.length)) + 4
   return `Fulldev CLI: use Fulldev apps from a terminal or an AI agent, through the
-Fulldev MCP server. One sign-in covers every app your organization gives you.
+Fulldev MCP server. One sign-in covers every app of the organizations you
+choose; --org picks one per call.
 
 Usage:
   fulldev <command> [options]
@@ -303,6 +331,8 @@ export function parseCommandLine(
       options: {
         url: { type: "string" },
         file: { type: "string", short: "f" },
+        org: { type: "string" },
+        "all-orgs": { type: "boolean" },
         timeout: { type: "string" },
         login: { type: "boolean" },
         browser: { type: "boolean" },
@@ -349,11 +379,18 @@ export function parseCommandLine(
 
   if (first === "login" || first === "logout" || first === "status") {
     allow(first, rootCommands[first]!.options)
-    if (rest.length)
+    if (rest.length) {
+      // Sign-ins were per app until 0.4, so `fulldev login cms` is a habit.
+      const app = findApp(rest[0]!)
+      const command = `fulldev ${first}${target.urlFromFlag ? ` --url ${target.url}` : ""}`
       throw new UsageError(
-        `fulldev ${first} takes no app: one sign-in covers every app.`,
+        app
+          ? `One sign-in covers every app, ${app.title} too. Run: ${command}`
+          : `fulldev ${first} takes no app: one sign-in covers every app. Run: ${command}`,
         helpFor(first),
+        { command },
       )
+    }
     if (first === "login")
       return { kind: "login", target, browser: values.browser ?? true }
     return { kind: first, target }
@@ -389,6 +426,11 @@ export function parseCommandLine(
       return { kind: "tools", target, session, app, name: args[0] }
     case "call":
       usage(args.length === 1 || args.length === 2)
+      if (values.org !== undefined && values["all-orgs"])
+        throw new UsageError(
+          "Use --org or --all-orgs, not both.",
+          helpFor(topic),
+        )
       return {
         kind: "call",
         target,
@@ -396,6 +438,8 @@ export function parseCommandLine(
         tool: app ? toolName(app, args[0]!) : args[0]!,
         json: args[1],
         file: values.file,
+        organization: values.org,
+        allOrganizations: values["all-orgs"],
       }
     default: {
       usage(app !== undefined && args[0] === "wait" && args.length === 3)
@@ -414,6 +458,7 @@ export function parseCommandLine(
         branchId: args[1]!,
         formId: args[2]!,
         timeoutMinutes,
+        organization: values.org,
       }
     }
   }

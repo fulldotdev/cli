@@ -49,19 +49,23 @@ Exit codes:
 
 ## Sign in
 
-The person signs in once, for every app, with their Fulldev account on app.full.dev, with a code sent to their email or with Google, and picks an organization when they are in more than one:
+The person signs in once, for every app, with their Fulldev account on app.full.dev, with a code sent to their email or with Google, and chooses the organizations the CLI may work in:
 
 ```sh
 fulldev login              # opens the browser
-fulldev status             # signed in, still valid, email, organization, expiry
+fulldev status             # signed in, still valid, email, organizations with their apps, expiry
 fulldev logout             # revokes the sign-in and deletes the tokens
 ```
 
-Tell the person a sign-in page opened, or give them the link from stderr. Login waits up to five minutes.
+Tell the person a sign-in page opened, or give them the link from stderr. Login waits up to ten minutes.
 
 When the person's browser is on another computer, as when you run on a server over SSH, the page after sign-in does not load. Then the person runs `fulldev login --no-browser` in a terminal on this computer, opens the link, and pastes the address of that last page into the terminal.
 
-Without a terminal, as when you run commands, a command never starts a sign-in: it exits with 3 at once. Then run `fulldev login` and ask the person to finish it. The organization is chosen at sign-in; to switch organization, run `fulldev login` again.
+Without a terminal, as when you run commands, a command never starts a sign-in: it exits with 3 at once. Then run `fulldev login` and ask the person to finish it. To add or remove an organization, run `fulldev login` again.
+
+## Organizations
+
+`fulldev status` lists the organizations of the sign-in, each with its slug and the apps the person may use there. When there is more than one, every call names its organization with `--org <slug>`: ask the person which one when it is not clear, and never guess, since a change in the wrong organization reaches another business. To read across all of them, add `--all-orgs` to a tool that only reads.
 
 ## First, read the instructions
 

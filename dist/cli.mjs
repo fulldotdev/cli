@@ -33,8 +33,11 @@ var CliError = class extends Error {
 };
 /** A mistake in how the CLI was called. */
 var UsageError = class extends CliError {
-	constructor(message, help = "fulldev --help") {
-		super("USAGE", message, exitCodes.usage, { help });
+	constructor(message, help = "fulldev --help", details = {}) {
+		super("USAGE", message, exitCodes.usage, {
+			help,
+			...details
+		});
 		this.name = "UsageError";
 	}
 };
@@ -379,14 +382,21 @@ function resolveTarget(flagUrl, env) {
 }
 //#endregion
 //#region src/args.ts
+const organizationDetails = `
+When the sign-in is for more than one organization, --org names the one to
+work in, by its slug from fulldev status. --all-orgs calls a tool that only
+reads in every organization of the sign-in that has its app, and prints
+{"organizations":[{"organization","result" or "error"}]}; it exits with 1
+when one failed.`;
 const rootCommands = {
 	login: {
 		usage: "fulldev login [--no-browser] [--url <mcp url>]",
-		summary: "Sign in, once for every app",
+		summary: "Sign in, once for every app and organization",
 		options: ["browser", "url"],
-		details: `Signs in to the Fulldev MCP server in your browser, where you choose your
-organization when you are in more than one. One sign-in covers every app
-the organization gives you. Run fulldev login again to switch organization.
+		details: `Signs in to the Fulldev MCP server in your browser, where you choose the
+organizations fulldev may work in: all of yours at first. One sign-in covers
+every app they give you. Run fulldev login again to change the choice, and
+choose the organization of a call with --org.
 
 With --no-browser, open the link in a browser on any computer. When that is
 another computer, as over SSH, the page after sign-in does not load: copy its
@@ -406,8 +416,8 @@ the result says so.`
 		summary: "Show the sign-in",
 		options: ["url"],
 		details: `Prints whether you are signed in, whether the sign-in still works, your
-email, organization and when the access token expires, and where the tokens
-are stored. Exits with 3 when a sign-in is needed, and with 1 when the
+email, the organizations of the sign-in with their slugs and the apps you may
+use in each, when the access token expires, and where the tokens are stored. Exits with 3 when a sign-in is needed, and with 1 when the
 server could not be reached to check it.`
 	},
 	instructions: {
@@ -435,17 +445,20 @@ tool. With a name: its description, input schema, output schema and
 annotations. Each app's tools start with its name, such as cms_.`
 	},
 	call: {
-		usage: "fulldev call <tool> [json | -] [--file <path>]",
+		usage: "fulldev call <tool> [json | -] [--file <path>] [--org <slug>]",
 		summary: "Call a tool with a JSON object",
 		options: [
 			"file",
+			"org",
+			"all-orgs",
 			"url",
 			"login",
 			"browser"
 		],
 		details: `The tool's input is a JSON object: the argument, a file with --file, or
 stdin with -. Without input it sends {}. Prints the tool's result as JSON on
-stdout. When the tool fails, prints its error on stderr and exits with 1.`
+stdout. When the tool fails, prints its error on stderr and exits with 1.
+${organizationDetails}`
 	},
 	help: {
 		usage: "fulldev help [command...]",
@@ -482,10 +495,12 @@ of the app's tools. With a name, with or without the app's prefix: its
 description, input schema, output schema and annotations.`
 	},
 	call: {
-		usage: "fulldev <app> call <tool> [json | -] [--file <path>]",
+		usage: "fulldev <app> call <tool> [json | -] [--file <path>] [--org <slug>]",
 		summary: "Call one of the app's tools with a JSON object",
 		options: [
 			"file",
+			"org",
+			"all-orgs",
 			"url",
 			"login",
 			"browser"
@@ -494,14 +509,16 @@ description, input schema, output schema and annotations.`
 list_repositories calls cms_list_repositories. Its input is a JSON object:
 the argument, a file with --file, or stdin with -. Without input it sends
 {}. Prints the tool's result as JSON on stdout. When the tool fails, prints
-its error on stderr and exits with 1.`
+its error on stderr and exits with 1.
+${organizationDetails}`
 	}
 };
 const formWait = {
-	usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>]",
+	usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>] [--org <slug>]",
 	summary: "Wait until the person sends a form",
 	options: [
 		"timeout",
+		"org",
 		"url",
 		"login",
 		"browser"
@@ -515,7 +532,9 @@ const optionHelp = {
 	file: "-f, --file <path>    Read the tool's JSON input from a file",
 	timeout: "--timeout <minutes>  How long to wait (default 30)",
 	login: "--no-login           Fail with exit code 3 instead of signing in",
-	browser: "--no-browser         Print the sign-in link, for a browser here or elsewhere"
+	browser: "--no-browser         Print the sign-in link, for a browser here or elsewhere",
+	org: "--org <slug>         The organization to work in",
+	"all-orgs": "--all-orgs           Every organization of the sign-in (reading tools)"
 };
 const footer = `Data is JSON on stdout; progress lines go to stderr. Every error is one JSON
 object on stderr: {"error":{"code","message",...}}.
@@ -540,7 +559,8 @@ const serverLine = `Server: ${server.url} (${urlVariable} or --url overrides it)
 function rootHelp() {
 	const width = Math.max(...apps.map((app) => app.name.length)) + 4;
 	return `Fulldev CLI: use Fulldev apps from a terminal or an AI agent, through the
-Fulldev MCP server. One sign-in covers every app your organization gives you.
+Fulldev MCP server. One sign-in covers every app of the organizations you
+choose; --org picks one per call.
 
 Usage:
   fulldev <command> [options]
@@ -631,6 +651,8 @@ function parseCommandLine(argv, env = process.env) {
 					type: "string",
 					short: "f"
 				},
+				org: { type: "string" },
+				"all-orgs": { type: "boolean" },
 				timeout: { type: "string" },
 				login: { type: "boolean" },
 				browser: { type: "boolean" },
@@ -678,7 +700,11 @@ function parseCommandLine(argv, env = process.env) {
 	};
 	if (first === "login" || first === "logout" || first === "status") {
 		allow(first, rootCommands[first].options);
-		if (rest.length) throw new UsageError(`fulldev ${first} takes no app: one sign-in covers every app.`, helpFor(first));
+		if (rest.length) {
+			const app = findApp(rest[0]);
+			const command = `fulldev ${first}${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
+			throw new UsageError(app ? `One sign-in covers every app, ${app.title} too. Run: ${command}` : `fulldev ${first} takes no app: one sign-in covers every app. Run: ${command}`, helpFor(first), { command });
+		}
 		if (first === "login") return {
 			kind: "login",
 			target,
@@ -727,13 +753,16 @@ function parseCommandLine(argv, env = process.env) {
 			};
 		case "call":
 			usage(args.length === 1 || args.length === 2);
+			if (values.org !== void 0 && values["all-orgs"]) throw new UsageError("Use --org or --all-orgs, not both.", helpFor(topic));
 			return {
 				kind: "call",
 				target,
 				session,
 				tool: app ? toolName(app, args[0]) : args[0],
 				json: args[1],
-				file: values.file
+				file: values.file,
+				organization: values.org,
+				allOrganizations: values["all-orgs"]
 			};
 		default: {
 			usage(app !== void 0 && args[0] === "wait" && args.length === 3);
@@ -746,7 +775,8 @@ function parseCommandLine(argv, env = process.env) {
 				app,
 				branchId: args[1],
 				formId: args[2],
-				timeoutMinutes
+				timeoutMinutes,
+				organization: values.org
 			};
 		}
 	}
@@ -1146,7 +1176,7 @@ function openBrowser(url) {
 * app's MCP URL as the resource. Without the browser, the address after
 * sign-in can also be pasted, for a browser on another computer.
 */
-async function browserLogin(target, store, { browser, log, timeoutMs = 3e5, fetchFn, input = process.stdin }) {
+async function browserLogin(target, store, { browser, log, timeoutMs = 6e5, fetchFn, input = process.stdin }) {
 	const discovery = await discover(target, fetchFn);
 	if (discovery.metadata.client_id_metadata_document_supported !== true) throw new CliError("CLIENT_METADATA_UNSUPPORTED", `The authorization server ${discovery.issuer} does not support Client ID Metadata Documents, which fulldev needs to sign in to ${target.title}.`);
 	const callback = await listenForCallback();
@@ -1379,6 +1409,18 @@ async function listTools(client) {
 	} while (cursor);
 	return tools;
 }
+/** The server's own tool that lists the organizations of the sign-in. */
+const organizationsTool = "fulldev_list_organizations";
+/** The organizations of the sign-in, with the apps the person may use in each. */
+async function listOrganizations(client) {
+	const result = await client.callTool({
+		name: organizationsTool,
+		arguments: {}
+	}, { timeout: requestTimeoutMs });
+	if (result.isError) throw new CliError("ERROR", JSON.stringify(toolError(result)));
+	const { organizations } = toolOutput(result);
+	return organizations ?? [];
+}
 /** The sign-in, and whether the server still accepts it. */
 async function signInStatus(target, io) {
 	const { credentials, storage } = await io.store.read(target.url);
@@ -1389,8 +1431,16 @@ async function signInStatus(target, io) {
 	};
 	let valid = true;
 	let error;
+	let organizations;
 	try {
-		await (await connect(target, io)).close().catch(() => {});
+		const client = await connect(target, io);
+		try {
+			organizations = await listOrganizations(client);
+		} catch (cause) {
+			error = `The organizations could not be listed: ${cause.message}`;
+		} finally {
+			await client.close().catch(() => {});
+		}
 	} catch (cause) {
 		if (isSignInRequired(cause)) valid = false;
 		else {
@@ -1399,7 +1449,6 @@ async function signInStatus(target, io) {
 		}
 	}
 	const current = await io.store.get(target.url);
-	const access = claims(current.tokens?.access_token);
 	const expires = expiresAt(current);
 	return {
 		...base,
@@ -1407,7 +1456,11 @@ async function signInStatus(target, io) {
 		valid,
 		...error ? { error } : {},
 		email: current.email,
-		organizationId: access.org_id,
+		organizations: organizations?.map(({ slug, name, apps }) => ({
+			slug,
+			name,
+			apps
+		})),
 		expiresAt: expires ? new Date(expires).toISOString() : void 0,
 		storage
 	};
@@ -1456,8 +1509,52 @@ async function logout(target, io) {
 function instructionsFor(text, app) {
 	const [overview = "", ...sections] = text.split(/\n(?=## )/);
 	const own = sections.find((section) => section.split("\n")[0].endsWith(`(${app.name}_)`));
-	if (!own) throw new CliError("APP_NOT_AVAILABLE", `${app.title} is not among your apps in this organization. Run fulldev instructions for the apps you may use, or fulldev login to choose another organization.`);
+	if (!own) throw new CliError("APP_NOT_AVAILABLE", `${app.title} is not among your apps in the organizations of this sign-in. Run fulldev status for the apps you may use in each, or fulldev login to choose other organizations.`);
 	return `${overview.trimEnd()}\n\n${own.trim()}`;
+}
+/**
+* Calls a tool that only reads once in every organization of the sign-in
+* whose apps include the tool's app, and prints every answer together.
+*/
+async function callInEvery(command, args, io) {
+	const answers = await withClient(command.target, command.session, io, async (client) => {
+		const tool = (await listTools(client)).find(({ name }) => name === command.tool);
+		if (!tool) throw new CliError("NOT_FOUND", `You have no tool named ${command.tool}. Run fulldev tools for the list.`);
+		if (tool.annotations?.readOnlyHint !== true) throw new UsageError(`--all-orgs calls only tools that only read, and ${command.tool} changes data. Name one organization with --org.`, "fulldev help call");
+		const app = command.tool.split("_")[0];
+		const organizations = (await listOrganizations(client)).filter(({ apps }) => apps.includes(app));
+		return Promise.all(organizations.map(async ({ slug, name }) => {
+			const organization = {
+				slug,
+				name
+			};
+			try {
+				const result = await client.callTool({
+					name: command.tool,
+					arguments: {
+						...args,
+						organization: slug
+					}
+				}, { timeout: requestTimeoutMs });
+				return result.isError ? {
+					organization,
+					error: toolError(result).error
+				} : {
+					organization,
+					result: toolOutput(result)
+				};
+			} catch (error) {
+				const failure = signInError(error, command.target);
+				if (isSignInRequired(failure)) throw failure;
+				return {
+					organization,
+					error: describeError(failure).body.error
+				};
+			}
+		}));
+	});
+	io.stdout(json({ organizations: answers }));
+	return answers.some((answer) => "error" in answer) ? exitCodes.error : exitCodes.ok;
 }
 async function run(command, io) {
 	const log = (line) => io.stderr(`${line}\n`);
@@ -1521,6 +1618,8 @@ async function run(command, io) {
 				json: command.json,
 				file: command.file
 			});
+			if (command.allOrganizations) return callInEvery(command, args, io);
+			if (command.organization !== void 0) args.organization = command.organization;
 			const result = await withClient(command.target, command.session, io, (client) => client.callTool({
 				name: command.tool,
 				arguments: args
@@ -1535,7 +1634,10 @@ async function run(command, io) {
 		case "form-wait": {
 			const outcome = await withClient(command.target, command.session, io, (client) => waitForForm((name, args, signal) => client.callTool({
 				name,
-				arguments: args
+				arguments: command.organization === void 0 ? args : {
+					...args,
+					organization: command.organization
+				}
 			}, {
 				timeout: requestTimeoutMs,
 				signal
