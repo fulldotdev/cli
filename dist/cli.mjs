@@ -1538,16 +1538,17 @@ async function callInEvery(command, args, io) {
 				}, { timeout: requestTimeoutMs });
 				return result.isError ? {
 					organization,
-					...toolError(result)
+					error: toolError(result).error
 				} : {
 					organization,
 					result: toolOutput(result)
 				};
 			} catch (error) {
-				if (isSignInRequired(error)) throw error;
+				const failure = signInError(error, command.target);
+				if (isSignInRequired(failure)) throw failure;
 				return {
 					organization,
-					...describeError(error).body
+					error: describeError(failure).body.error
 				};
 			}
 		}));

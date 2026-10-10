@@ -287,12 +287,15 @@ async function callInEvery(
               },
               { timeout: requestTimeoutMs },
             )
+            // The organization of the call stays, whatever the error holds.
             return result.isError
-              ? { organization, ...toolError(result) }
+              ? { organization, error: toolError(result).error }
               : { organization, result: toolOutput(result) }
           } catch (error) {
-            if (isSignInRequired(error)) throw error
-            return { organization, ...describeError(error).body }
+            // A rejected sign-in ends the command, which then offers one.
+            const failure = signInError(error, command.target)
+            if (isSignInRequired(failure)) throw failure
+            return { organization, error: describeError(failure).body.error }
           }
         }),
       )
