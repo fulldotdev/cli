@@ -1,5 +1,11 @@
 # fulldev
 
+## 0.6.0
+
+### Minor Changes
+
+- [#14](https://github.com/fulldotdev/cli/pull/14) [`5168325`](https://github.com/fulldotdev/cli/commit/516832589c7df71131d8de7ad0502bf490a87785) Thanks [@silveltman](https://github.com/silveltman)! - Discover and call product HTTP operations with `fulldev api`, using the server's OpenAPI specification and existing OAuth connection. Add Send and Work shortcuts.
+
 ## 0.5.0
 
 ### Minor Changes
