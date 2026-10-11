@@ -311,7 +311,7 @@ var CredentialStore = class {
 };
 //#endregion
 //#region package.json
-var version = "0.5.0";
+var version = "0.6.0";
 //#endregion
 //#region src/input.ts
 /** Reads a tool's arguments: a JSON object from the argument, a file or stdin. */
