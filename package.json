@@ -1,6 +1,6 @@
 {
   "name": "fulldev",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Use Fulldev products from the command line through their shared MCP server and HTTP APIs.",
   "license": "MIT",
   "repository": {

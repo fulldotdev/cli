@@ -1,5 +1,11 @@
 # fulldev
 
+## 0.6.1
+
+### Patch Changes
+
+- [#16](https://github.com/fulldotdev/cli/pull/16) [`fb0d4b6`](https://github.com/fulldotdev/cli/commit/fb0d4b60cd686a68cc356af4611b4e119a9a037a) Thanks [@silveltman](https://github.com/silveltman)! - Update Contacts descriptions for multiple accounts, document Send and Work, and include HTTP API discovery in the agent skill.
+
 ## 0.6.0
 
 ### Minor Changes
