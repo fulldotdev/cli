@@ -56,7 +56,7 @@ export const apps: Array<App> = [
     name: "contacts",
     title: "Fulldev Contacts",
     description:
-      "Look after the daily copy of your Google contacts from one Google account to another: its runs, look-alike questions, pausing and resuming.",
+      "Manage the daily sync of your Google contacts across multiple accounts: runs, look-alike questions, pausing and resuming.",
   },
   {
     name: "send",

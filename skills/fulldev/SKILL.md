@@ -1,6 +1,6 @@
 ---
 name: fulldev
-description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use contacts when they want to check, pause or resume the daily copy of their Google contacts with Fulldev Contacts, or answer its look-alike questions.
+description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use send for customer message scenarios and deliveries. Use work for tasks, projects and goals in their organization. Use contacts when they want to check, pause or resume the daily synchronization of their Google contacts across multiple accounts with Fulldev Contacts, or answer its look-alike questions.
 license: MIT
 compatibility: Needs Node.js 24 or later and network access to app.full.dev.
 ---
@@ -9,14 +9,20 @@ compatibility: Needs Node.js 24 or later and network access to app.full.dev.
 
 The `fulldev` CLI talks to the Fulldev MCP server, which has the tools of every Fulldev app the person may use. Each app's tools start with its name, such as `cms_`. The tools, their schemas and the instructions come from the server, so they are always current.
 
-| App        | For                                                                                                                                            |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cms`      | Editing the person's website. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person.   |
-| `connect`  | The person's business tools, such as Shopify, with the access their organization grants them.                                                  |
-| `scan`     | Scanning websites. Only for Fulldev administrators.                                                                                            |
-| `sites`    | Making a new website with Fulldev Sites from a brief and design options. Only for Fulldev administrators for now.                              |
-| `pages`    | Publishing a report or plan as a web page with Fulldev Pages. Only for Fulldev administrators for now.                                         |
-| `contacts` | The person's daily copy of Google contacts from one of their Google accounts to another: its runs, look-alike questions, pausing and resuming. |
+| App        | For                                                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cms`      | Editing the person's website. Every change goes to a branch and a draft pull request, within the file permissions Fulldev grants the person. |
+| `connect`  | The person's business tools, such as Shopify, with the access their organization grants them.                                                |
+| `scan`     | Scanning websites. Only for Fulldev administrators.                                                                                          |
+| `sites`    | Making a new website with Fulldev Sites from a brief and design options. Only for Fulldev administrators for now.                            |
+| `pages`    | Publishing a report or plan as a web page with Fulldev Pages. Only for Fulldev administrators for now.                                       |
+| `contacts` | Daily synchronization of Google contacts across multiple accounts: runs, look-alike questions, pausing and resuming.                         |
+| `send`     | Customer message scenarios and deliveries.                                                                                                   |
+| `work`     | Tasks, projects and goals in their organization.                                                                                             |
+
+## HTTP API
+
+Use `fulldev api <app> --help` to discover the HTTP operations and `fulldev api <app>.<operation> '<json>' --org <slug>` to call one. MCP shortcuts expose the curated tools; HTTP discovery exposes the app's supported API operations. Authentication and permissions are shared.
 
 ## Run
 
