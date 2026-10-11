@@ -52,7 +52,12 @@
     "fulldev",
     "cms",
     "connect",
+    "contacts",
+    "pages",
     "scan",
+    "send",
+    "sites",
+    "work",
     "mcp",
     "cli",
     "agent-skills"

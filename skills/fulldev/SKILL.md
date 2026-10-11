@@ -1,13 +1,13 @@
 ---
 name: fulldev
-description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use send for customer message scenarios and deliveries. Use work for tasks, projects and goals in their organization. Use contacts when they want to check, pause or resume the daily synchronization of their Google contacts across multiple accounts with Import and Export in Fulldev Contacts, or answer its look-alike questions.
+description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use send for customer message scenarios and deliveries. Use work for tasks, projects and goals in their organization. Use contacts when they want to check, start, pause or resume the daily synchronization of their Google contacts across multiple accounts with Import and Export in Fulldev Contacts, or answer its look-alike questions.
 license: MIT
 compatibility: Needs Node.js 24 or later and network access to app.full.dev.
 ---
 
 # Fulldev
 
-The `fulldev` CLI talks to the Fulldev MCP server, which has the tools of every Fulldev app the person may use. Each app's tools start with its name, such as `cms_`. The tools, their schemas and the instructions come from the server, so they are always current.
+The `fulldev` CLI uses the shared HTTP APIs and the Fulldev MCP server, which has the tools of every Fulldev app the person may use. Each app's tools start with its name, such as `cms_`. The tools, their schemas and the instructions come from the server, so they are always current.
 
 | App        | For                                                                                                                                          |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |

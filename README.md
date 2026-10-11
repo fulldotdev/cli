@@ -2,16 +2,16 @@
 
 Use Fulldev apps from a terminal or an AI agent. The CLI discovers the full HTTP API from OpenAPI and is a thin client of the Fulldev MCP server at `https://app.full.dev/mcp`, which has the tools of every app your organization gives you: it reads the tools, their schemas, and the instructions from the server each time, so it stays in step with the apps. Each app's tools start with its name, such as `cms_`.
 
-| App        | For                                                                                                  |
-| ---------- | ---------------------------------------------------------------------------------------------------- |
-| `cms`      | Editing your website through the [Fulldev CMS](https://cms.full.dev)                                 |
-| `connect`  | Your business tools, such as Shopify, through [Fulldev Connect](https://connect.full.dev)            |
-| `scan`     | Scanning websites with [Fulldev Scan](https://scan.full.dev), for administrators only                |
-| `sites`    | A finished website from [Fulldev Sites](https://sites.full.dev), for administrators only             |
-| `pages`    | Reports and plans as web pages with [Fulldev Pages](https://pages.full.dev), for administrators only |
-| `contacts` | Daily synchronization of your Google contacts across multiple accounts with Import and Export.       |
-| `send`     | Customer message scenarios and deliveries.                                                           |
-| `work`     | Tasks, projects and goals in your organization.                                                      |
+| App        | For                                                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `cms`      | Editing your website through the [Fulldev CMS](https://cms.full.dev)                                                       |
+| `connect`  | Your business tools, such as Shopify, through [Fulldev Connect](https://connect.full.dev)                                  |
+| `scan`     | Scanning websites with [Fulldev Scan](https://scan.full.dev), for administrators only                                      |
+| `sites`    | A finished website from [Fulldev Sites](https://sites.full.dev), for administrators only                                   |
+| `pages`    | Reports and plans as web pages with [Fulldev Pages](https://pages.full.dev), for administrators only                       |
+| `contacts` | [Daily synchronization of your Google contacts across multiple accounts with Import and Export](https://contacts.full.dev) |
+| `send`     | [Customer message scenarios and deliveries](https://send.full.dev)                                                         |
+| `work`     | Tasks, projects and goals in your organization                                                                             |
 
 ## Install
 
@@ -153,5 +153,3 @@ fulldev contacts api accounts.list --file input.json --org my-company
 ```
 
 Use an operation id from `fulldev api <app>`. Input is a JSON object, a file with `--file`, or stdin with `-`. Reads send query parameters; changes send JSON. Existing OAuth credentials and organization grants cover both interfaces. The CLI refuses redirects and paths outside the selected app before sending credentials. Servers without OpenAPI continue to support the existing MCP commands.
-
-Send and Work are also available as `fulldev send` and `fulldev work`.
