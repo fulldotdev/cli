@@ -1,6 +1,6 @@
 # Fulldev CLI
 
-Use Fulldev apps from a terminal or an AI agent. The CLI is a thin client of the Fulldev MCP server at `https://app.full.dev/mcp`, which has the tools of every app your organization gives you: it reads the tools, their schemas, and the instructions from the server each time, so it stays in step with the apps. Each app's tools start with its name, such as `cms_`.
+Use Fulldev apps from a terminal or an AI agent. The CLI discovers the full HTTP API from OpenAPI and is a thin client of the Fulldev MCP server at `https://app.full.dev/mcp`, which has the tools of every app your organization gives you: it reads the tools, their schemas, and the instructions from the server each time, so it stays in step with the apps. Each app's tools start with its name, such as `cms_`.
 
 | App        | For                                                                                                  |
 | ---------- | ---------------------------------------------------------------------------------------------------- |
@@ -140,3 +140,17 @@ Every change that users get adds a changeset with `pnpm changeset`. The [`fullde
 ## License
 
 [MIT](LICENSE)
+
+## Full HTTP API
+
+MCP shortcuts remain the curated tool interface. On a server exposing OpenAPI, the same CLI can discover and call every product HTTP operation, including ones omitted from MCP:
+
+```sh
+fulldev api contacts
+fulldev api contacts.accounts.list '{}' --org my-company
+fulldev contacts api accounts.list --file input.json --org my-company
+```
+
+Use an operation id from `fulldev api <app>`. Input is a JSON object, a file with `--file`, or stdin with `-`. Reads send query parameters; changes send JSON. Existing OAuth credentials and organization grants cover both interfaces. The CLI refuses redirects and paths outside the selected app before sending credentials. Servers without OpenAPI continue to support the existing MCP commands.
+
+Send and Work are also available as `fulldev send` and `fulldev work`.

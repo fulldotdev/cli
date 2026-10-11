@@ -206,6 +206,14 @@ describe("parseCommandLine", () => {
 })
 
 describe("helpText", () => {
+  it("shows the app API syntax only for known apps", () => {
+    expect(helpText("contacts api")).toContain(
+      "fulldev contacts api [operation]",
+    )
+    expect(helpText("contacts")).toContain("fulldev contacts api [operation]")
+    expect(helpText("api")).toContain("fulldev api <app>[.<operation>]")
+    expect(helpText("unknown api")).toBeUndefined()
+  })
   it("lists every app, the server and the exit codes at the root", () => {
     const text = helpText("")!
     for (const app of apps) expect(text).toContain(app.name)

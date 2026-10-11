@@ -12,6 +12,16 @@ import {
 import type { App, Target } from "./apps.ts"
 
 export type Command =
+  | {
+      kind: "api"
+      target: Target
+      session: Session
+      app: App
+      operation?: string
+      json?: string
+      file?: string
+      organization?: string
+    }
   | { kind: "help"; topic: string }
   | { kind: "version" }
   | { kind: "login"; target: Target; browser: boolean }
@@ -71,6 +81,15 @@ interface Topic {
   summary: string
   options?: Array<Option>
   details?: string
+}
+
+const apiTopic: Topic = {
+  usage:
+    "fulldev api <app>[.<operation>] [JSON | -] [--file <path>] [--org <slug>]",
+  summary: "List or call an operation of the app's OpenAPI API",
+  options: ["url", "file", "org", "login", "browser"],
+  details:
+    "Without an operation, lists the API operations and their schemas. Calls use the same login and organization grants as MCP. Data is JSON on stdout; errors go to stderr.",
 }
 
 const organizationDetails = `
@@ -205,12 +224,21 @@ Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage err
 
 const pad = (text: string, width: number) => text.padEnd(width)
 
+function appApiTopic(app: App): Topic {
+  return {
+    ...apiTopic,
+    usage: `fulldev ${app.name} api [operation] [JSON | -] [--file <path>] [--org <slug>]`,
+  }
+}
+
 function appTopics(app: App): Record<string, Topic> {
   const name = (topic: Topic): Topic => ({
     ...topic,
     usage: topic.usage.replace("<app>", app.name),
   })
-  const topics: Record<string, Topic> = {}
+  const topics: Record<string, Topic> = {
+    [`${app.name} api`]: appApiTopic(app),
+  }
   for (const [command, topic] of Object.entries(appCommands))
     topics[`${app.name} ${command}`] = name(topic)
   if (app.forms) {
@@ -234,6 +262,7 @@ Usage:
   fulldev <app> <command> [options]
 
 Commands:
+  fulldev api <app>[.<operation>]  List or call an OpenAPI operation
 ${Object.values(rootCommands)
   .map((topic) => `  ${pad(topic.usage.split(" [--")[0]!, 32)}${topic.summary}`)
   .join("\n")}
@@ -295,6 +324,7 @@ ${footer}`
 /** The help text for a topic such as "", "login", "cms" or "cms call". */
 export function helpText(topic: string): string | undefined {
   if (topic === "") return rootHelp()
+  if (topic === "api") return topicHelp(apiTopic)
   const root = rootCommands[topic]
   if (root) return topicHelp(root)
   const app = findApp(topic)
@@ -394,6 +424,33 @@ export function parseCommandLine(
     if (first === "login")
       return { kind: "login", target, browser: values.browser ?? true }
     return { kind: first, target }
+  }
+
+  if (first === "api" || (findApp(first) && rest[0] === "api")) {
+    allow("api", apiTopic.options)
+    const owner = first === "api" ? rest[0]?.split(".")[0] : first
+    const app = owner && findApp(owner)
+    if (!app)
+      throw new UsageError(
+        "Use fulldev api <app>[.<operation>].",
+        "fulldev api --help",
+      )
+    const words = first === "api" ? rest : rest.slice(1)
+    const operation =
+      first === "api" ? words[0]?.split(".").slice(1).join(".") : words[0]
+    if (words.length > 2) throw new UsageError(`Usage: ${apiTopic.usage}`)
+    if (!operation && (words[1] || values.file))
+      throw new UsageError("Choose an API operation before giving arguments.")
+    return {
+      kind: "api",
+      target,
+      session,
+      app,
+      operation: operation || undefined,
+      json: words[1],
+      file: values.file,
+      organization: values.org,
+    }
   }
 
   const app = findApp(first)

@@ -58,6 +58,16 @@ export const apps: Array<App> = [
     description:
       "Look after the daily copy of your Google contacts from one Google account to another: its runs, look-alike questions, pausing and resuming.",
   },
+  {
+    name: "send",
+    title: "Fulldev Send",
+    description: "Manage customer message scenarios and their deliveries.",
+  },
+  {
+    name: "work",
+    title: "Fulldev Work",
+    description: "Plan tasks, projects and goals in your organization.",
+  },
 ]
 
 /** The server this run uses. */

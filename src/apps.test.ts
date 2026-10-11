@@ -13,6 +13,8 @@ describe("apps", () => {
       "sites",
       "pages",
       "contacts",
+      "send",
+      "work",
     ])
     expect(server.url).toBe("https://app.full.dev/mcp")
     for (const app of apps) {
