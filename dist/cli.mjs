@@ -4,12 +4,12 @@ import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client, OAuthError, OAuthErrorCode, ProtocolError, SdkError, StreamableHTTPClientTransport, UnauthorizedError, auth, checkResourceAllowed, discoverAuthorizationServerMetadata, discoverOAuthServerInfo, refreshAuthorization, resourceUrlFromServerUrl } from "@modelcontextprotocol/client";
-import { parseArgs } from "node:util";
 import { text } from "node:stream/consumers";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
+import { parseArgs } from "node:util";
 //#region src/errors.ts
 const exitCodes = {
 	ok: 0,
@@ -312,580 +312,6 @@ var CredentialStore = class {
 //#endregion
 //#region package.json
 var version = "0.5.0";
-//#endregion
-//#region src/apps.ts
-/** The Fulldev MCP server: the tools of every app the person may use. */
-const server = {
-	title: "Fulldev",
-	url: "https://app.full.dev/mcp"
-};
-/** The environment variable that overrides the server's URL. */
-const urlVariable = "FULLDEV_URL";
-const apps = [
-	{
-		name: "cms",
-		title: "Fulldev CMS",
-		description: "Edit your website: text, pages, images and settings, through a pull request.",
-		forms: true
-	},
-	{
-		name: "connect",
-		title: "Fulldev Connect",
-		description: "Use your organization's business tools, such as Shopify, with the access Fulldev grants you."
-	},
-	{
-		name: "scan",
-		title: "Fulldev Scan",
-		description: "Scan whole websites for problems. For administrators only."
-	},
-	{
-		name: "sites",
-		title: "Fulldev Sites",
-		description: "Have Fulldev make a finished website from a brief and tested design options. For administrators only for now."
-	},
-	{
-		name: "pages",
-		title: "Fulldev Pages",
-		description: "Publish reports and plans as clear web pages, composed from ready-made blocks. For administrators only for now."
-	},
-	{
-		name: "contacts",
-		title: "Fulldev Contacts",
-		description: "Look after the daily copy of your Google contacts from one Google account to another: its runs, look-alike questions, pausing and resuming."
-	}
-];
-function findApp(name) {
-	return apps.find((app) => app.name === name);
-}
-/**
-* A tool's name on the server: an app's tools start with the app's name,
-* which may be left out after `fulldev <app>`.
-*/
-function toolName(app, name) {
-	return name.startsWith(`${app.name}_`) ? name : `${app.name}_${name}`;
-}
-/** The server: --url, then FULLDEV_URL, then app.full.dev. */
-function resolveTarget(flagUrl, env) {
-	const url = flagUrl ?? env["FULLDEV_URL"] ?? server.url;
-	let parsed;
-	try {
-		parsed = new URL(url);
-	} catch {
-		throw new UsageError(`Not a valid server URL: ${url}`);
-	}
-	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new UsageError(`The server URL must use https: ${url}`);
-	return {
-		title: server.title,
-		url: parsed.href,
-		urlFromFlag: flagUrl !== void 0
-	};
-}
-//#endregion
-//#region src/args.ts
-const organizationDetails = `
-When the sign-in is for more than one organization, --org names the one to
-work in, by its slug from fulldev status. --all-orgs calls a tool that only
-reads in every organization of the sign-in that has its app, and prints
-{"organizations":[{"organization","result" or "error"}]}; it exits with 1
-when one failed.`;
-const rootCommands = {
-	login: {
-		usage: "fulldev login [--no-browser] [--url <mcp url>]",
-		summary: "Sign in, once for every app and organization",
-		options: ["browser", "url"],
-		details: `Signs in to the Fulldev MCP server in your browser, where you choose the
-organizations fulldev may work in: all of yours at first. One sign-in covers
-every app they give you. Run fulldev login again to change the choice, and
-choose the organization of a call with --org.
-
-With --no-browser, open the link in a browser on any computer. When that is
-another computer, as over SSH, the page after sign-in does not load: copy its
-address from the address bar and paste it into this terminal.`
-	},
-	logout: {
-		usage: "fulldev logout [--url <mcp url>]",
-		summary: "Sign out and revoke the tokens",
-		options: ["url"],
-		details: `Revokes the refresh token at the authorization server and deletes the
-tokens from this computer. The access token cannot be revoked and expires
-within 15 minutes. When revoking fails, the local sign-out still happens and
-the result says so.`
-	},
-	status: {
-		usage: "fulldev status [--url <mcp url>]",
-		summary: "Show the sign-in",
-		options: ["url"],
-		details: `Prints whether you are signed in, whether the sign-in still works, your
-email, the organizations of the sign-in with their slugs and the apps you may
-use in each, when the access token expires, and where the tokens are stored. Exits with 3 when a sign-in is needed, and with 1 when the
-server could not be reached to check it.`
-	},
-	instructions: {
-		usage: "fulldev instructions",
-		summary: "The instructions for agents, of every app you may use; read first",
-		options: [
-			"url",
-			"login",
-			"browser"
-		],
-		details: `Prints the instructions the server sends, as plain text: an overview, then
-each app's own, under its name. fulldev <app> instructions prints the
-overview and that app's part.`
-	},
-	tools: {
-		usage: "fulldev tools [name]",
-		summary: "List the tools of every app you may use, or show one tool",
-		options: [
-			"url",
-			"login",
-			"browser"
-		],
-		details: `Without a name: the name, title and first line of the description of each
-tool. With a name: its description, input schema, output schema and
-annotations. Each app's tools start with its name, such as cms_.`
-	},
-	call: {
-		usage: "fulldev call <tool> [json | -] [--file <path>] [--org <slug>]",
-		summary: "Call a tool with a JSON object",
-		options: [
-			"file",
-			"org",
-			"all-orgs",
-			"url",
-			"login",
-			"browser"
-		],
-		details: `The tool's input is a JSON object: the argument, a file with --file, or
-stdin with -. Without input it sends {}. Prints the tool's result as JSON on
-stdout. When the tool fails, prints its error on stderr and exits with 1.
-${organizationDetails}`
-	},
-	help: {
-		usage: "fulldev help [command...]",
-		summary: "Show help for a command"
-	}
-};
-/** The commands that use the server, also per app. */
-const serverCommands = [
-	"instructions",
-	"tools",
-	"call"
-];
-const appCommands = {
-	instructions: {
-		usage: "fulldev <app> instructions",
-		summary: "The overview and the app's own instructions; read first",
-		options: [
-			"url",
-			"login",
-			"browser"
-		],
-		details: "Prints them as plain text, as the server sends them."
-	},
-	tools: {
-		usage: "fulldev <app> tools [name]",
-		summary: "List the app's tools, or show one tool",
-		options: [
-			"url",
-			"login",
-			"browser"
-		],
-		details: `Without a name: the name, title and first line of the description of each
-of the app's tools. With a name, with or without the app's prefix: its
-description, input schema, output schema and annotations.`
-	},
-	call: {
-		usage: "fulldev <app> call <tool> [json | -] [--file <path>] [--org <slug>]",
-		summary: "Call one of the app's tools with a JSON object",
-		options: [
-			"file",
-			"org",
-			"all-orgs",
-			"url",
-			"login",
-			"browser"
-		],
-		details: `The tool's name may leave out the app's prefix: fulldev cms call
-list_repositories calls cms_list_repositories. Its input is a JSON object:
-the argument, a file with --file, or stdin with -. Without input it sends
-{}. Prints the tool's result as JSON on stdout. When the tool fails, prints
-its error on stderr and exits with 1.
-${organizationDetails}`
-	}
-};
-const formWait = {
-	usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>] [--org <slug>]",
-	summary: "Wait until the person sends a form",
-	options: [
-		"timeout",
-		"org",
-		"url",
-		"login",
-		"browser"
-	],
-	details: `Calls cms_wait_for_form until the person sends the form, with a progress
-line on stderr each round, then prints the result. After --timeout minutes
-(default 30) it prints the form id and exits with 2, so you can run it again.`
-};
-const optionHelp = {
-	url: "--url <mcp url>      Use another server, such as a deploy preview's",
-	file: "-f, --file <path>    Read the tool's JSON input from a file",
-	timeout: "--timeout <minutes>  How long to wait (default 30)",
-	login: "--no-login           Fail with exit code 3 instead of signing in",
-	browser: "--no-browser         Print the sign-in link, for a browser here or elsewhere",
-	org: "--org <slug>         The organization to work in",
-	"all-orgs": "--all-orgs           Every organization of the sign-in (reading tools)"
-};
-const footer = `Data is JSON on stdout; progress lines go to stderr. Every error is one JSON
-object on stderr: {"error":{"code","message",...}}.
-Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage error.
-`;
-const pad = (text, width) => text.padEnd(width);
-function appTopics(app) {
-	const name = (topic) => ({
-		...topic,
-		usage: topic.usage.replace("<app>", app.name)
-	});
-	const topics = {};
-	for (const [command, topic] of Object.entries(appCommands)) topics[`${app.name} ${command}`] = name(topic);
-	if (app.forms) {
-		const wait = name(formWait);
-		topics[`${app.name} form`] = wait;
-		topics[`${app.name} form wait`] = wait;
-	}
-	return topics;
-}
-const serverLine = `Server: ${server.url} (${urlVariable} or --url overrides it)`;
-function rootHelp() {
-	const width = Math.max(...apps.map((app) => app.name.length)) + 4;
-	return `Fulldev CLI: use Fulldev apps from a terminal or an AI agent, through the
-Fulldev MCP server. One sign-in covers every app of the organizations you
-choose; --org picks one per call.
-
-Usage:
-  fulldev <command> [options]
-  fulldev <app> <command> [options]
-
-Commands:
-${Object.values(rootCommands).map((topic) => `  ${pad(topic.usage.split(" [--")[0], 32)}${topic.summary}`).join("\n")}
-
-Apps (their tools start with the app's name, such as cms_):
-${apps.map((app) => `  ${pad(app.name, width)}${app.description}`).join("\n")}
-
-App commands, for one app's part:
-${[...Object.values(appCommands), {
-		...formWait,
-		usage: formWait.usage.replace("<app>", "cms")
-	}].map((topic) => `  ${topic.usage.split(" [--")[0]}\n      ${topic.summary}`).join("\n")}
-
-Run fulldev instructions first and follow them.
-Run fulldev help <command...> for a command's options, for example
-fulldev help cms call.
-
-${serverLine}
-
-Options:
-  -h, --help     Show help
-  -v, --version  Show the version
-
-${footer}`;
-}
-function appHelp(app) {
-	const topics = Object.values(appTopics(app)).filter((topic, index, all) => all.indexOf(topic) === index);
-	return `${app.title}
-
-${app.description}
-
-Its tools start with ${app.name}_; after fulldev ${app.name} you may leave that out.
-
-Usage:
-${topics.map((topic) => `  ${topic.usage}\n      ${topic.summary}`).join("\n")}
-
-Run fulldev ${app.name} instructions first and follow them.
-Sign in with fulldev login, once for every app.
-
-${serverLine}
-
-${footer}`;
-}
-function topicHelp(topic) {
-	const options = topic.options?.map((option) => `  ${optionHelp[option]}`);
-	return `Usage: ${topic.usage}
-
-${topic.summary}.
-${topic.details ? `\n${topic.details}\n` : ""}${options?.length ? `\nOptions:\n${options.join("\n")}\n` : ""}
-${footer}`;
-}
-/** The help text for a topic such as "", "login", "cms" or "cms call". */
-function helpText(topic) {
-	if (topic === "") return rootHelp();
-	const root = rootCommands[topic];
-	if (root) return topicHelp(root);
-	const app = findApp(topic);
-	if (app) return appHelp(app);
-	const [name] = topic.split(" ");
-	const owner = findApp(name ?? "");
-	const found = owner ? appTopics(owner)[topic] : void 0;
-	return found ? topicHelp(found) : void 0;
-}
-/** The longest leading words of `words` that name a help topic. */
-function closestTopic(words) {
-	for (let length = Math.min(words.length, 3); length > 0; length--) {
-		const topic = words.slice(0, length).join(" ");
-		if (helpText(topic) !== void 0) return topic;
-	}
-	return "";
-}
-const helpFor = (topic) => topic ? `fulldev ${topic} --help` : "fulldev --help";
-function parseCommandLine(argv, env = process.env) {
-	let parsed;
-	try {
-		parsed = parseArgs({
-			args: argv,
-			allowPositionals: true,
-			allowNegative: true,
-			strict: true,
-			options: {
-				url: { type: "string" },
-				file: {
-					type: "string",
-					short: "f"
-				},
-				org: { type: "string" },
-				"all-orgs": { type: "boolean" },
-				timeout: { type: "string" },
-				login: { type: "boolean" },
-				browser: { type: "boolean" },
-				help: {
-					type: "boolean",
-					short: "h"
-				},
-				version: {
-					type: "boolean",
-					short: "v"
-				}
-			}
-		});
-	} catch (error) {
-		throw new UsageError(error.message, helpFor(closestTopic(argv.filter((word) => !word.startsWith("-")))));
-	}
-	const { values, positionals } = parsed;
-	if (values.version) return { kind: "version" };
-	if (positionals[0] === "help") {
-		const topic = positionals.slice(1).join(" ");
-		if (helpText(topic) === void 0) throw new UsageError(`No help for: ${topic}`);
-		return {
-			kind: "help",
-			topic
-		};
-	}
-	if (values.help) return {
-		kind: "help",
-		topic: closestTopic(positionals)
-	};
-	if (positionals.length === 0) return {
-		kind: "help",
-		topic: ""
-	};
-	const [first, ...rest] = positionals;
-	const given = Object.keys(values).filter((key) => values[key] !== void 0);
-	const allow = (topic, options = []) => {
-		const extra = given.find((key) => !options.includes(key));
-		if (extra) throw new UsageError(`--${extra === "login" || extra === "browser" ? `no-${extra}` : extra} does not work with fulldev ${topic}.`, helpFor(topic));
-	};
-	const target = resolveTarget(values.url, env);
-	const session = {
-		login: values.login ?? true,
-		browser: values.browser ?? true
-	};
-	if (first === "login" || first === "logout" || first === "status") {
-		allow(first, rootCommands[first].options);
-		if (rest.length) {
-			const app = findApp(rest[0]);
-			const command = `fulldev ${first}${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
-			throw new UsageError(app ? `One sign-in covers every app, ${app.title} too. Run: ${command}` : `fulldev ${first} takes no app: one sign-in covers every app. Run: ${command}`, helpFor(first), { command });
-		}
-		if (first === "login") return {
-			kind: "login",
-			target,
-			browser: values.browser ?? true
-		};
-		return {
-			kind: first,
-			target
-		};
-	}
-	const app = findApp(first);
-	const command = app ? rest[0] : first;
-	const args = app ? rest.slice(1) : rest;
-	if (!app && !serverCommands.includes(first)) throw new UsageError(`Unknown command or app: ${first}`);
-	if (app && command === void 0) {
-		allow(app.name);
-		return {
-			kind: "help",
-			topic: app.name
-		};
-	}
-	const topic = app ? `${app.name} ${command}` : first;
-	const known = app ? appTopics(app)[topic] : rootCommands[topic];
-	if (!known) throw new UsageError(`Unknown command: fulldev ${topic}`, helpFor(app?.name ?? ""));
-	allow(topic, known.options);
-	const usage = (count) => {
-		if (!count) throw new UsageError(`Usage: ${known.usage}`, helpFor(topic));
-	};
-	switch (command) {
-		case "instructions":
-			usage(args.length === 0);
-			return {
-				kind: "instructions",
-				target,
-				session,
-				app
-			};
-		case "tools":
-			usage(args.length <= 1);
-			return {
-				kind: "tools",
-				target,
-				session,
-				app,
-				name: args[0]
-			};
-		case "call":
-			usage(args.length === 1 || args.length === 2);
-			if (values.org !== void 0 && values["all-orgs"]) throw new UsageError("Use --org or --all-orgs, not both.", helpFor(topic));
-			return {
-				kind: "call",
-				target,
-				session,
-				tool: app ? toolName(app, args[0]) : args[0],
-				json: args[1],
-				file: values.file,
-				organization: values.org,
-				allOrganizations: values["all-orgs"]
-			};
-		default: {
-			usage(app !== void 0 && args[0] === "wait" && args.length === 3);
-			const timeoutMinutes = values.timeout === void 0 ? 30 : Number(values.timeout);
-			if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) throw new UsageError("--timeout must be a number of minutes above 0.", helpFor(topic));
-			return {
-				kind: "form-wait",
-				target,
-				session,
-				app,
-				branchId: args[1],
-				formId: args[2],
-				timeoutMinutes,
-				organization: values.org
-			};
-		}
-	}
-}
-//#endregion
-//#region src/result.ts
-/** A tool result as JSON: its structured content, or its text parsed as JSON. */
-function toolOutput(result) {
-	if (result.structuredContent !== void 0) return result.structuredContent;
-	const values = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).map((text) => {
-		try {
-			return JSON.parse(text);
-		} catch {
-			return text;
-		}
-	});
-	return values.length === 1 ? values[0] : values;
-}
-/** A failed tool result as {"error":{"code","message",...}}, whatever the server sent. */
-function toolError(result) {
-	const output = toolOutput(result);
-	if (output !== null && typeof output === "object" && !Array.isArray(output)) {
-		const { error } = output;
-		if (error !== null && typeof error === "object" && !Array.isArray(error)) return output;
-		return { error: {
-			code: "TOOL_ERROR",
-			message: "The tool failed.",
-			details: output
-		} };
-	}
-	return { error: {
-		code: "TOOL_ERROR",
-		message: typeof output === "string" ? output : JSON.stringify(output)
-	} };
-}
-//#endregion
-//#region src/form-wait.ts
-/** The one tool the CLI names itself, without its app's prefix. */
-const waitTool = "wait_for_form";
-const maxFailures = 3;
-const retryMs = 5e3;
-function minutes(ms) {
-	const total = Math.max(0, Math.round(ms / 1e3));
-	return `${Math.floor(total / 60)}m ${total % 60}s`;
-}
-function wait(ms, signal) {
-	return new Promise((resolve) => {
-		const timer = setTimeout(done, ms);
-		signal.addEventListener("abort", done, { once: true });
-		function done() {
-			clearTimeout(timer);
-			signal.removeEventListener("abort", done);
-			resolve();
-		}
-	});
-}
-/**
-* Calls wait_for_form while it answers waiting true. Each call waits on the
-* server, so the loop does not sleep between rounds. Network failures are
-* retried a few times; tool and protocol errors end the wait. The deadline
-* also aborts a request that is still running.
-*/
-async function waitForForm(callTool, { branchId, formId, timeoutMs, app = "cms", progress = () => {}, now = Date.now, sleep = wait }) {
-	const deadline = now() + timeoutMs;
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	const { signal } = controller;
-	const aborted = () => signal.aborted;
-	let failures = 0;
-	try {
-		for (let round = 1; now() < deadline && !aborted(); round++) {
-			let result;
-			try {
-				result = await callTool(`${app}_${waitTool}`, {
-					branchId,
-					formId
-				}, signal);
-				failures = 0;
-			} catch (error) {
-				if (aborted()) break;
-				if (isSignInRequired(error) || error instanceof ProtocolError || ++failures >= maxFailures) throw error;
-				progress(`The request failed (${error.message}); retrying.`);
-				await sleep(retryMs, signal);
-				continue;
-			}
-			if (result.isError) return {
-				status: "error",
-				error: toolError(result)
-			};
-			const output = toolOutput(result);
-			if (!(output !== null && typeof output === "object" && output.waiting === true)) return {
-				status: "done",
-				result: output
-			};
-			progress(`Waiting for the person to send the form (round ${round}, ${minutes(deadline - now())} left).`);
-		}
-	} finally {
-		clearTimeout(timer);
-	}
-	return {
-		status: "timeout",
-		result: {
-			waiting: true,
-			branchId,
-			formId,
-			message: `Stopped waiting after ${minutes(timeoutMs)}. Run fulldev ${app} form wait ${branchId} ${formId} to keep waiting, or continue when the person says they are done.`
-		}
-	};
-}
 //#endregion
 //#region src/input.ts
 /** Reads a tool's arguments: a JSON object from the argument, a file or stdin. */
@@ -1347,6 +773,705 @@ var StoredTokenAuth = class {
 	}
 };
 //#endregion
+//#region src/api.ts
+function apiOperations(spec) {
+	return Object.entries(spec.paths ?? {}).flatMap(([path, methods]) => Object.entries(methods).filter(([method]) => [
+		"get",
+		"post",
+		"put",
+		"patch",
+		"delete"
+	].includes(method)).map(([method, operation]) => ({
+		path,
+		method: method.toUpperCase(),
+		...operation
+	})));
+}
+/** All HTTP operations from the server's specification, independent of its MCP tool selection. */
+async function runApi(command, io, fetchFn = fetch) {
+	const { target, app } = command;
+	const origin = new URL(target.url).origin;
+	const specResponse = await fetchFn(`${origin}/${app.name}/api/openapi.json`, {
+		redirect: "error",
+		signal: AbortSignal.timeout(3e4)
+	});
+	if (!specResponse.ok) throw new CliError("API_UNAVAILABLE", "This server does not expose the app's OpenAPI specification.");
+	const operations = apiOperations(await specResponse.json());
+	if (!command.operation) return operations;
+	const operation = operations.find((candidate) => candidate.operationId === command.operation);
+	if (!operation) throw new CliError("NOT_FOUND", `Unknown API operation: ${command.operation}. Run fulldev api ${app.name}.`);
+	const input = await readToolArguments({
+		json: command.json,
+		file: command.file
+	});
+	const url = new URL(`/${app.name}/api/v1${operation.path}`, origin);
+	if (url.origin !== origin || !url.pathname.startsWith(`/${app.name}/api/v1/`)) throw new CliError("INVALID_API", "The server returned an invalid operation path.");
+	const reads = operation.method === "GET";
+	if (reads) for (const [key, value] of Object.entries(input)) {
+		if (value === void 0) continue;
+		if (Array.isArray(value)) value.forEach((part) => url.searchParams.append(key, typeof part === "string" ? part : JSON.stringify(part)));
+		else url.searchParams.set(key, typeof value === "string" ? value : JSON.stringify(value));
+	}
+	const auth = new StoredTokenAuth(target, io.store);
+	const attempt = async () => {
+		const token = await auth.token();
+		if (!token) throw new SignInRequiredError(target);
+		const headers = new Headers({ authorization: `Bearer ${token}` });
+		if (command.organization) headers.set("x-fulldev-organization", command.organization);
+		if (!reads) headers.set("content-type", "application/json");
+		return fetchFn(url, {
+			method: operation.method,
+			headers,
+			body: reads ? void 0 : JSON.stringify(input),
+			redirect: "error",
+			signal: AbortSignal.timeout(12e4)
+		});
+	};
+	let response;
+	try {
+		response = await attempt();
+	} catch (error) {
+		if (!(error instanceof SignInRequiredError) || !io.interactive || !command.session.login) throw error;
+		await browserLogin(target, io.store, {
+			browser: command.session.browser,
+			log: (line) => io.stderr(`${line}\n`)
+		});
+		response = await attempt();
+	}
+	if (response.status === 401) {
+		await auth.onUnauthorized({ fetchFn });
+		response = await attempt();
+	}
+	if (response.status === 401) throw new SignInRequiredError(target);
+	const body = response.status === 204 ? null : await response.json().catch(() => {
+		throw new CliError("API_FAILED", `API returned a non-JSON response (${response.status}).`);
+	});
+	if (!response.ok) {
+		const failure = body;
+		const error = failure?.error ?? failure ?? {};
+		throw new CliError(error.code ?? "API_FAILED", error.message ?? `API request failed (${response.status}).`);
+	}
+	return body;
+}
+//#endregion
+//#region src/apps.ts
+/** The Fulldev MCP server: the tools of every app the person may use. */
+const server = {
+	title: "Fulldev",
+	url: "https://app.full.dev/mcp"
+};
+/** The environment variable that overrides the server's URL. */
+const urlVariable = "FULLDEV_URL";
+const apps = [
+	{
+		name: "cms",
+		title: "Fulldev CMS",
+		description: "Edit your website: text, pages, images and settings, through a pull request.",
+		forms: true
+	},
+	{
+		name: "connect",
+		title: "Fulldev Connect",
+		description: "Use your organization's business tools, such as Shopify, with the access Fulldev grants you."
+	},
+	{
+		name: "scan",
+		title: "Fulldev Scan",
+		description: "Scan whole websites for problems. For administrators only."
+	},
+	{
+		name: "sites",
+		title: "Fulldev Sites",
+		description: "Have Fulldev make a finished website from a brief and tested design options. For administrators only for now."
+	},
+	{
+		name: "pages",
+		title: "Fulldev Pages",
+		description: "Publish reports and plans as clear web pages, composed from ready-made blocks. For administrators only for now."
+	},
+	{
+		name: "contacts",
+		title: "Fulldev Contacts",
+		description: "Look after the daily copy of your Google contacts from one Google account to another: its runs, look-alike questions, pausing and resuming."
+	},
+	{
+		name: "send",
+		title: "Fulldev Send",
+		description: "Manage customer message scenarios and their deliveries."
+	},
+	{
+		name: "work",
+		title: "Fulldev Work",
+		description: "Plan tasks, projects and goals in your organization."
+	}
+];
+function findApp(name) {
+	return apps.find((app) => app.name === name);
+}
+/**
+* A tool's name on the server: an app's tools start with the app's name,
+* which may be left out after `fulldev <app>`.
+*/
+function toolName(app, name) {
+	return name.startsWith(`${app.name}_`) ? name : `${app.name}_${name}`;
+}
+/** The server: --url, then FULLDEV_URL, then app.full.dev. */
+function resolveTarget(flagUrl, env) {
+	const url = flagUrl ?? env["FULLDEV_URL"] ?? server.url;
+	let parsed;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new UsageError(`Not a valid server URL: ${url}`);
+	}
+	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new UsageError(`The server URL must use https: ${url}`);
+	return {
+		title: server.title,
+		url: parsed.href,
+		urlFromFlag: flagUrl !== void 0
+	};
+}
+//#endregion
+//#region src/args.ts
+const apiTopic = {
+	usage: "fulldev api <app>[.<operation>] [JSON | -] [--file <path>] [--org <slug>]",
+	summary: "List or call an operation of the app's OpenAPI API",
+	options: [
+		"url",
+		"file",
+		"org",
+		"login",
+		"browser"
+	],
+	details: "Without an operation, lists the API operations and their schemas. Calls use the same login and organization grants as MCP. Data is JSON on stdout; errors go to stderr."
+};
+const organizationDetails = `
+When the sign-in is for more than one organization, --org names the one to
+work in, by its slug from fulldev status. --all-orgs calls a tool that only
+reads in every organization of the sign-in that has its app, and prints
+{"organizations":[{"organization","result" or "error"}]}; it exits with 1
+when one failed.`;
+const rootCommands = {
+	login: {
+		usage: "fulldev login [--no-browser] [--url <mcp url>]",
+		summary: "Sign in, once for every app and organization",
+		options: ["browser", "url"],
+		details: `Signs in to the Fulldev MCP server in your browser, where you choose the
+organizations fulldev may work in: all of yours at first. One sign-in covers
+every app they give you. Run fulldev login again to change the choice, and
+choose the organization of a call with --org.
+
+With --no-browser, open the link in a browser on any computer. When that is
+another computer, as over SSH, the page after sign-in does not load: copy its
+address from the address bar and paste it into this terminal.`
+	},
+	logout: {
+		usage: "fulldev logout [--url <mcp url>]",
+		summary: "Sign out and revoke the tokens",
+		options: ["url"],
+		details: `Revokes the refresh token at the authorization server and deletes the
+tokens from this computer. The access token cannot be revoked and expires
+within 15 minutes. When revoking fails, the local sign-out still happens and
+the result says so.`
+	},
+	status: {
+		usage: "fulldev status [--url <mcp url>]",
+		summary: "Show the sign-in",
+		options: ["url"],
+		details: `Prints whether you are signed in, whether the sign-in still works, your
+email, the organizations of the sign-in with their slugs and the apps you may
+use in each, when the access token expires, and where the tokens are stored. Exits with 3 when a sign-in is needed, and with 1 when the
+server could not be reached to check it.`
+	},
+	instructions: {
+		usage: "fulldev instructions",
+		summary: "The instructions for agents, of every app you may use; read first",
+		options: [
+			"url",
+			"login",
+			"browser"
+		],
+		details: `Prints the instructions the server sends, as plain text: an overview, then
+each app's own, under its name. fulldev <app> instructions prints the
+overview and that app's part.`
+	},
+	tools: {
+		usage: "fulldev tools [name]",
+		summary: "List the tools of every app you may use, or show one tool",
+		options: [
+			"url",
+			"login",
+			"browser"
+		],
+		details: `Without a name: the name, title and first line of the description of each
+tool. With a name: its description, input schema, output schema and
+annotations. Each app's tools start with its name, such as cms_.`
+	},
+	call: {
+		usage: "fulldev call <tool> [json | -] [--file <path>] [--org <slug>]",
+		summary: "Call a tool with a JSON object",
+		options: [
+			"file",
+			"org",
+			"all-orgs",
+			"url",
+			"login",
+			"browser"
+		],
+		details: `The tool's input is a JSON object: the argument, a file with --file, or
+stdin with -. Without input it sends {}. Prints the tool's result as JSON on
+stdout. When the tool fails, prints its error on stderr and exits with 1.
+${organizationDetails}`
+	},
+	help: {
+		usage: "fulldev help [command...]",
+		summary: "Show help for a command"
+	}
+};
+/** The commands that use the server, also per app. */
+const serverCommands = [
+	"instructions",
+	"tools",
+	"call"
+];
+const appCommands = {
+	instructions: {
+		usage: "fulldev <app> instructions",
+		summary: "The overview and the app's own instructions; read first",
+		options: [
+			"url",
+			"login",
+			"browser"
+		],
+		details: "Prints them as plain text, as the server sends them."
+	},
+	tools: {
+		usage: "fulldev <app> tools [name]",
+		summary: "List the app's tools, or show one tool",
+		options: [
+			"url",
+			"login",
+			"browser"
+		],
+		details: `Without a name: the name, title and first line of the description of each
+of the app's tools. With a name, with or without the app's prefix: its
+description, input schema, output schema and annotations.`
+	},
+	call: {
+		usage: "fulldev <app> call <tool> [json | -] [--file <path>] [--org <slug>]",
+		summary: "Call one of the app's tools with a JSON object",
+		options: [
+			"file",
+			"org",
+			"all-orgs",
+			"url",
+			"login",
+			"browser"
+		],
+		details: `The tool's name may leave out the app's prefix: fulldev cms call
+list_repositories calls cms_list_repositories. Its input is a JSON object:
+the argument, a file with --file, or stdin with -. Without input it sends
+{}. Prints the tool's result as JSON on stdout. When the tool fails, prints
+its error on stderr and exits with 1.
+${organizationDetails}`
+	}
+};
+const formWait = {
+	usage: "fulldev <app> form wait <branchId> <formId> [--timeout <minutes>] [--org <slug>]",
+	summary: "Wait until the person sends a form",
+	options: [
+		"timeout",
+		"org",
+		"url",
+		"login",
+		"browser"
+	],
+	details: `Calls cms_wait_for_form until the person sends the form, with a progress
+line on stderr each round, then prints the result. After --timeout minutes
+(default 30) it prints the form id and exits with 2, so you can run it again.`
+};
+const optionHelp = {
+	url: "--url <mcp url>      Use another server, such as a deploy preview's",
+	file: "-f, --file <path>    Read the tool's JSON input from a file",
+	timeout: "--timeout <minutes>  How long to wait (default 30)",
+	login: "--no-login           Fail with exit code 3 instead of signing in",
+	browser: "--no-browser         Print the sign-in link, for a browser here or elsewhere",
+	org: "--org <slug>         The organization to work in",
+	"all-orgs": "--all-orgs           Every organization of the sign-in (reading tools)"
+};
+const footer = `Data is JSON on stdout; progress lines go to stderr. Every error is one JSON
+object on stderr: {"error":{"code","message",...}}.
+Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage error.
+`;
+const pad = (text, width) => text.padEnd(width);
+function appTopics(app) {
+	const name = (topic) => ({
+		...topic,
+		usage: topic.usage.replace("<app>", app.name)
+	});
+	const topics = { [`${app.name} api`]: apiTopic };
+	for (const [command, topic] of Object.entries(appCommands)) topics[`${app.name} ${command}`] = name(topic);
+	if (app.forms) {
+		const wait = name(formWait);
+		topics[`${app.name} form`] = wait;
+		topics[`${app.name} form wait`] = wait;
+	}
+	return topics;
+}
+const serverLine = `Server: ${server.url} (${urlVariable} or --url overrides it)`;
+function rootHelp() {
+	const width = Math.max(...apps.map((app) => app.name.length)) + 4;
+	return `Fulldev CLI: use Fulldev apps from a terminal or an AI agent, through the
+Fulldev MCP server. One sign-in covers every app of the organizations you
+choose; --org picks one per call.
+
+Usage:
+  fulldev <command> [options]
+  fulldev <app> <command> [options]
+
+Commands:
+  fulldev api <app>[.<operation>]  List or call an OpenAPI operation
+${Object.values(rootCommands).map((topic) => `  ${pad(topic.usage.split(" [--")[0], 32)}${topic.summary}`).join("\n")}
+
+Apps (their tools start with the app's name, such as cms_):
+${apps.map((app) => `  ${pad(app.name, width)}${app.description}`).join("\n")}
+
+App commands, for one app's part:
+${[...Object.values(appCommands), {
+		...formWait,
+		usage: formWait.usage.replace("<app>", "cms")
+	}].map((topic) => `  ${topic.usage.split(" [--")[0]}\n      ${topic.summary}`).join("\n")}
+
+Run fulldev instructions first and follow them.
+Run fulldev help <command...> for a command's options, for example
+fulldev help cms call.
+
+${serverLine}
+
+Options:
+  -h, --help     Show help
+  -v, --version  Show the version
+
+${footer}`;
+}
+function appHelp(app) {
+	const topics = Object.values(appTopics(app)).filter((topic, index, all) => all.indexOf(topic) === index);
+	return `${app.title}
+
+${app.description}
+
+Its tools start with ${app.name}_; after fulldev ${app.name} you may leave that out.
+
+Usage:
+${topics.map((topic) => `  ${topic.usage}\n      ${topic.summary}`).join("\n")}
+
+Run fulldev ${app.name} instructions first and follow them.
+Sign in with fulldev login, once for every app.
+
+${serverLine}
+
+${footer}`;
+}
+function topicHelp(topic) {
+	const options = topic.options?.map((option) => `  ${optionHelp[option]}`);
+	return `Usage: ${topic.usage}
+
+${topic.summary}.
+${topic.details ? `\n${topic.details}\n` : ""}${options?.length ? `\nOptions:\n${options.join("\n")}\n` : ""}
+${footer}`;
+}
+/** The help text for a topic such as "", "login", "cms" or "cms call". */
+function helpText(topic) {
+	if (topic === "") return rootHelp();
+	if (topic === "api" || topic.endsWith(" api")) return topicHelp(apiTopic);
+	const root = rootCommands[topic];
+	if (root) return topicHelp(root);
+	const app = findApp(topic);
+	if (app) return appHelp(app);
+	const [name] = topic.split(" ");
+	const owner = findApp(name ?? "");
+	const found = owner ? appTopics(owner)[topic] : void 0;
+	return found ? topicHelp(found) : void 0;
+}
+/** The longest leading words of `words` that name a help topic. */
+function closestTopic(words) {
+	for (let length = Math.min(words.length, 3); length > 0; length--) {
+		const topic = words.slice(0, length).join(" ");
+		if (helpText(topic) !== void 0) return topic;
+	}
+	return "";
+}
+const helpFor = (topic) => topic ? `fulldev ${topic} --help` : "fulldev --help";
+function parseCommandLine(argv, env = process.env) {
+	let parsed;
+	try {
+		parsed = parseArgs({
+			args: argv,
+			allowPositionals: true,
+			allowNegative: true,
+			strict: true,
+			options: {
+				url: { type: "string" },
+				file: {
+					type: "string",
+					short: "f"
+				},
+				org: { type: "string" },
+				"all-orgs": { type: "boolean" },
+				timeout: { type: "string" },
+				login: { type: "boolean" },
+				browser: { type: "boolean" },
+				help: {
+					type: "boolean",
+					short: "h"
+				},
+				version: {
+					type: "boolean",
+					short: "v"
+				}
+			}
+		});
+	} catch (error) {
+		throw new UsageError(error.message, helpFor(closestTopic(argv.filter((word) => !word.startsWith("-")))));
+	}
+	const { values, positionals } = parsed;
+	if (values.version) return { kind: "version" };
+	if (positionals[0] === "help") {
+		const topic = positionals.slice(1).join(" ");
+		if (helpText(topic) === void 0) throw new UsageError(`No help for: ${topic}`);
+		return {
+			kind: "help",
+			topic
+		};
+	}
+	if (values.help) return {
+		kind: "help",
+		topic: closestTopic(positionals)
+	};
+	if (positionals.length === 0) return {
+		kind: "help",
+		topic: ""
+	};
+	const [first, ...rest] = positionals;
+	const given = Object.keys(values).filter((key) => values[key] !== void 0);
+	const allow = (topic, options = []) => {
+		const extra = given.find((key) => !options.includes(key));
+		if (extra) throw new UsageError(`--${extra === "login" || extra === "browser" ? `no-${extra}` : extra} does not work with fulldev ${topic}.`, helpFor(topic));
+	};
+	const target = resolveTarget(values.url, env);
+	const session = {
+		login: values.login ?? true,
+		browser: values.browser ?? true
+	};
+	if (first === "login" || first === "logout" || first === "status") {
+		allow(first, rootCommands[first].options);
+		if (rest.length) {
+			const app = findApp(rest[0]);
+			const command = `fulldev ${first}${target.urlFromFlag ? ` --url ${target.url}` : ""}`;
+			throw new UsageError(app ? `One sign-in covers every app, ${app.title} too. Run: ${command}` : `fulldev ${first} takes no app: one sign-in covers every app. Run: ${command}`, helpFor(first), { command });
+		}
+		if (first === "login") return {
+			kind: "login",
+			target,
+			browser: values.browser ?? true
+		};
+		return {
+			kind: first,
+			target
+		};
+	}
+	if (first === "api" || findApp(first) && rest[0] === "api") {
+		allow("api", apiTopic.options);
+		const owner = first === "api" ? rest[0]?.split(".")[0] : first;
+		const app = owner && findApp(owner);
+		if (!app) throw new UsageError("Use fulldev api <app>[.<operation>].", "fulldev api --help");
+		const words = first === "api" ? rest : rest.slice(1);
+		const operation = first === "api" ? words[0]?.split(".").slice(1).join(".") : words[0];
+		if (words.length > 2) throw new UsageError(`Usage: ${apiTopic.usage}`);
+		if (!operation && (words[1] || values.file)) throw new UsageError("Choose an API operation before giving arguments.");
+		return {
+			kind: "api",
+			target,
+			session,
+			app,
+			operation: operation || void 0,
+			json: words[1],
+			file: values.file,
+			organization: values.org
+		};
+	}
+	const app = findApp(first);
+	const command = app ? rest[0] : first;
+	const args = app ? rest.slice(1) : rest;
+	if (!app && !serverCommands.includes(first)) throw new UsageError(`Unknown command or app: ${first}`);
+	if (app && command === void 0) {
+		allow(app.name);
+		return {
+			kind: "help",
+			topic: app.name
+		};
+	}
+	const topic = app ? `${app.name} ${command}` : first;
+	const known = app ? appTopics(app)[topic] : rootCommands[topic];
+	if (!known) throw new UsageError(`Unknown command: fulldev ${topic}`, helpFor(app?.name ?? ""));
+	allow(topic, known.options);
+	const usage = (count) => {
+		if (!count) throw new UsageError(`Usage: ${known.usage}`, helpFor(topic));
+	};
+	switch (command) {
+		case "instructions":
+			usage(args.length === 0);
+			return {
+				kind: "instructions",
+				target,
+				session,
+				app
+			};
+		case "tools":
+			usage(args.length <= 1);
+			return {
+				kind: "tools",
+				target,
+				session,
+				app,
+				name: args[0]
+			};
+		case "call":
+			usage(args.length === 1 || args.length === 2);
+			if (values.org !== void 0 && values["all-orgs"]) throw new UsageError("Use --org or --all-orgs, not both.", helpFor(topic));
+			return {
+				kind: "call",
+				target,
+				session,
+				tool: app ? toolName(app, args[0]) : args[0],
+				json: args[1],
+				file: values.file,
+				organization: values.org,
+				allOrganizations: values["all-orgs"]
+			};
+		default: {
+			usage(app !== void 0 && args[0] === "wait" && args.length === 3);
+			const timeoutMinutes = values.timeout === void 0 ? 30 : Number(values.timeout);
+			if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) throw new UsageError("--timeout must be a number of minutes above 0.", helpFor(topic));
+			return {
+				kind: "form-wait",
+				target,
+				session,
+				app,
+				branchId: args[1],
+				formId: args[2],
+				timeoutMinutes,
+				organization: values.org
+			};
+		}
+	}
+}
+//#endregion
+//#region src/result.ts
+/** A tool result as JSON: its structured content, or its text parsed as JSON. */
+function toolOutput(result) {
+	if (result.structuredContent !== void 0) return result.structuredContent;
+	const values = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).map((text) => {
+		try {
+			return JSON.parse(text);
+		} catch {
+			return text;
+		}
+	});
+	return values.length === 1 ? values[0] : values;
+}
+/** A failed tool result as {"error":{"code","message",...}}, whatever the server sent. */
+function toolError(result) {
+	const output = toolOutput(result);
+	if (output !== null && typeof output === "object" && !Array.isArray(output)) {
+		const { error } = output;
+		if (error !== null && typeof error === "object" && !Array.isArray(error)) return output;
+		return { error: {
+			code: "TOOL_ERROR",
+			message: "The tool failed.",
+			details: output
+		} };
+	}
+	return { error: {
+		code: "TOOL_ERROR",
+		message: typeof output === "string" ? output : JSON.stringify(output)
+	} };
+}
+//#endregion
+//#region src/form-wait.ts
+/** The one tool the CLI names itself, without its app's prefix. */
+const waitTool = "wait_for_form";
+const maxFailures = 3;
+const retryMs = 5e3;
+function minutes(ms) {
+	const total = Math.max(0, Math.round(ms / 1e3));
+	return `${Math.floor(total / 60)}m ${total % 60}s`;
+}
+function wait(ms, signal) {
+	return new Promise((resolve) => {
+		const timer = setTimeout(done, ms);
+		signal.addEventListener("abort", done, { once: true });
+		function done() {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", done);
+			resolve();
+		}
+	});
+}
+/**
+* Calls wait_for_form while it answers waiting true. Each call waits on the
+* server, so the loop does not sleep between rounds. Network failures are
+* retried a few times; tool and protocol errors end the wait. The deadline
+* also aborts a request that is still running.
+*/
+async function waitForForm(callTool, { branchId, formId, timeoutMs, app = "cms", progress = () => {}, now = Date.now, sleep = wait }) {
+	const deadline = now() + timeoutMs;
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const { signal } = controller;
+	const aborted = () => signal.aborted;
+	let failures = 0;
+	try {
+		for (let round = 1; now() < deadline && !aborted(); round++) {
+			let result;
+			try {
+				result = await callTool(`${app}_${waitTool}`, {
+					branchId,
+					formId
+				}, signal);
+				failures = 0;
+			} catch (error) {
+				if (aborted()) break;
+				if (isSignInRequired(error) || error instanceof ProtocolError || ++failures >= maxFailures) throw error;
+				progress(`The request failed (${error.message}); retrying.`);
+				await sleep(retryMs, signal);
+				continue;
+			}
+			if (result.isError) return {
+				status: "error",
+				error: toolError(result)
+			};
+			const output = toolOutput(result);
+			if (!(output !== null && typeof output === "object" && output.waiting === true)) return {
+				status: "done",
+				result: output
+			};
+			progress(`Waiting for the person to send the form (round ${round}, ${minutes(deadline - now())} left).`);
+		}
+	} finally {
+		clearTimeout(timer);
+	}
+	return {
+		status: "timeout",
+		result: {
+			waiting: true,
+			branchId,
+			formId,
+			message: `Stopped waiting after ${minutes(timeoutMs)}. Run fulldev ${app} form wait ${branchId} ${formId} to keep waiting, or continue when the person says they are done.`
+		}
+	};
+}
+//#endregion
 //#region src/main.ts
 /** A tool call can wait on the server for up to a minute. */
 const requestTimeoutMs = 12e4;
@@ -1583,6 +1708,11 @@ async function run(command, io) {
 		}
 		case "logout": return logout(command.target, io);
 		case "status": return status(command.target, io);
+		case "api": {
+			const data = await runApi(command, io);
+			io.stdout(json(data));
+			return exitCodes.ok;
+		}
 		case "instructions": {
 			const text = await withClient(command.target, command.session, io, async (client) => client.getInstructions());
 			if (!text) log("The server sent no instructions.");

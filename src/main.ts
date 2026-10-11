@@ -7,6 +7,7 @@ import {
 import type { Tool } from "@modelcontextprotocol/client"
 
 import pkg from "../package.json" with { type: "json" }
+import { runApi } from "./api.ts"
 import { helpText, parseCommandLine } from "./args.ts"
 import type { Command, Session } from "./args.ts"
 import type { CredentialStore } from "./credentials.ts"
@@ -342,6 +343,11 @@ async function run(command: Command, io: Io): Promise<number> {
       return logout(command.target, io)
     case "status":
       return status(command.target, io)
+    case "api": {
+      const data = await runApi(command, io)
+      io.stdout(json(data))
+      return exitCodes.ok
+    }
     case "instructions": {
       const text = await withClient(
         command.target,
