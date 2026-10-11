@@ -224,12 +224,21 @@ Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage err
 
 const pad = (text: string, width: number) => text.padEnd(width)
 
+function appApiTopic(app: App): Topic {
+  return {
+    ...apiTopic,
+    usage: `fulldev ${app.name} api [operation] [JSON | -] [--file <path>] [--org <slug>]`,
+  }
+}
+
 function appTopics(app: App): Record<string, Topic> {
   const name = (topic: Topic): Topic => ({
     ...topic,
     usage: topic.usage.replace("<app>", app.name),
   })
-  const topics: Record<string, Topic> = { [`${app.name} api`]: apiTopic }
+  const topics: Record<string, Topic> = {
+    [`${app.name} api`]: appApiTopic(app),
+  }
   for (const [command, topic] of Object.entries(appCommands))
     topics[`${app.name} ${command}`] = name(topic)
   if (app.forms) {
@@ -315,7 +324,7 @@ ${footer}`
 /** The help text for a topic such as "", "login", "cms" or "cms call". */
 export function helpText(topic: string): string | undefined {
   if (topic === "") return rootHelp()
-  if (topic === "api" || topic.endsWith(" api")) return topicHelp(apiTopic)
+  if (topic === "api") return topicHelp(apiTopic)
   const root = rootCommands[topic]
   if (root) return topicHelp(root)
   const app = findApp(topic)

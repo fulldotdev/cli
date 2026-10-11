@@ -62,7 +62,25 @@ export async function runApi(
     json: command.json,
     file: command.file,
   })
-  const url = new URL(`/${app.name}/api/v1${operation.path}`, origin)
+  const payload = { ...input }
+  const path = operation.path.replace(/\{([^{}]+)\}/g, (_, name: string) => {
+    const value = input[name]
+    if (
+      (typeof value !== "string" &&
+        typeof value !== "number" &&
+        typeof value !== "boolean") ||
+      value === "" ||
+      value === "." ||
+      value === ".."
+    )
+      throw new CliError(
+        "INVALID_INPUT",
+        `Provide a scalar value for path parameter: ${name}.`,
+      )
+    delete payload[name]
+    return encodeURIComponent(String(value))
+  })
+  const url = new URL(`/${app.name}/api/v1${path}`, origin)
   if (url.origin !== origin || !url.pathname.startsWith(`/${app.name}/api/v1/`))
     throw new CliError(
       "INVALID_API",
@@ -70,7 +88,7 @@ export async function runApi(
     )
   const reads = operation.method === "GET"
   if (reads)
-    for (const [key, value] of Object.entries(input)) {
+    for (const [key, value] of Object.entries(payload)) {
       if (value === undefined) continue
       if (Array.isArray(value))
         value.forEach((part) =>
@@ -96,7 +114,7 @@ export async function runApi(
     return fetchFn(url, {
       method: operation.method,
       headers,
-      body: reads ? undefined : JSON.stringify(input),
+      body: reads ? undefined : JSON.stringify(payload),
       redirect: "error",
       signal: AbortSignal.timeout(120_000),
     })

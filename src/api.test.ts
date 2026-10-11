@@ -47,6 +47,54 @@ beforeEach(() => {
 })
 
 describe("HTTP API command", () => {
+  it.each(["get", "post"])(
+    "encodes %s path input separately from query and body",
+    async (method) => {
+      const fetchFn = vi.fn<typeof fetch>(async (url, init) => {
+        const actual = new URL(new Request(url).url)
+        if (actual.pathname.endsWith("openapi.json"))
+          return Response.json({
+            paths: {
+              "/records/{id}": { [method]: { operationId: "records.item" } },
+            },
+          })
+        expect(actual.pathname).toBe("/contacts/api/v1/records/a%2Fb%20%3F%23")
+        expect(actual.searchParams.has("id")).toBe(false)
+        if (method === "get") {
+          expect(actual.searchParams.get("enabled")).toBe("false")
+          expect(init?.body).toBeUndefined()
+        } else expect(init?.body).toBe('{"enabled":false}')
+        return Response.json({ ok: true })
+      })
+      await runApi(
+        command([
+          "api",
+          "contacts.records.item",
+          '{"id":"a/b ?#","enabled":false}',
+        ]),
+        io,
+        fetchFn,
+      )
+    },
+  )
+  it.each([{}, { id: null }, { id: {} }, { id: ".." }])(
+    "rejects missing or invalid path input before authenticating: %j",
+    async (input) => {
+      const fetchFn = vi.fn<typeof fetch>(async () =>
+        Response.json({
+          paths: { "/records/{id}": { get: { operationId: "records.item" } } },
+        }),
+      )
+      await expect(
+        runApi(
+          command(["api", "contacts.records.item", JSON.stringify(input)]),
+          io,
+          fetchFn,
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" })
+      expect(token).not.toHaveBeenCalled()
+    },
+  )
   it("supports both command forms, input files and organization selection", () => {
     expect(
       command(["api", "contacts.records.list", "{}", "--org", "first"]),

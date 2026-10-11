@@ -804,10 +804,17 @@ async function runApi(command, io, fetchFn = fetch) {
 		json: command.json,
 		file: command.file
 	});
-	const url = new URL(`/${app.name}/api/v1${operation.path}`, origin);
+	const payload = { ...input };
+	const path = operation.path.replace(/\{([^{}]+)\}/g, (_, name) => {
+		const value = input[name];
+		if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean" || value === "" || value === "." || value === "..") throw new CliError("INVALID_INPUT", `Provide a scalar value for path parameter: ${name}.`);
+		delete payload[name];
+		return encodeURIComponent(String(value));
+	});
+	const url = new URL(`/${app.name}/api/v1${path}`, origin);
 	if (url.origin !== origin || !url.pathname.startsWith(`/${app.name}/api/v1/`)) throw new CliError("INVALID_API", "The server returned an invalid operation path.");
 	const reads = operation.method === "GET";
-	if (reads) for (const [key, value] of Object.entries(input)) {
+	if (reads) for (const [key, value] of Object.entries(payload)) {
 		if (value === void 0) continue;
 		if (Array.isArray(value)) value.forEach((part) => url.searchParams.append(key, typeof part === "string" ? part : JSON.stringify(part)));
 		else url.searchParams.set(key, typeof value === "string" ? value : JSON.stringify(value));
@@ -822,7 +829,7 @@ async function runApi(command, io, fetchFn = fetch) {
 		return fetchFn(url, {
 			method: operation.method,
 			headers,
-			body: reads ? void 0 : JSON.stringify(input),
+			body: reads ? void 0 : JSON.stringify(payload),
 			redirect: "error",
 			signal: AbortSignal.timeout(12e4)
 		});
@@ -1108,12 +1115,18 @@ object on stderr: {"error":{"code","message",...}}.
 Exit codes: 0 ok, 1 error, 2 form wait timed out, 3 sign-in needed, 64 usage error.
 `;
 const pad = (text, width) => text.padEnd(width);
+function appApiTopic(app) {
+	return {
+		...apiTopic,
+		usage: `fulldev ${app.name} api [operation] [JSON | -] [--file <path>] [--org <slug>]`
+	};
+}
 function appTopics(app) {
 	const name = (topic) => ({
 		...topic,
 		usage: topic.usage.replace("<app>", app.name)
 	});
-	const topics = { [`${app.name} api`]: apiTopic };
+	const topics = { [`${app.name} api`]: appApiTopic(app) };
 	for (const [command, topic] of Object.entries(appCommands)) topics[`${app.name} ${command}`] = name(topic);
 	if (app.forms) {
 		const wait = name(formWait);
@@ -1187,7 +1200,7 @@ ${footer}`;
 /** The help text for a topic such as "", "login", "cms" or "cms call". */
 function helpText(topic) {
 	if (topic === "") return rootHelp();
-	if (topic === "api" || topic.endsWith(" api")) return topicHelp(apiTopic);
+	if (topic === "api") return topicHelp(apiTopic);
 	const root = rootCommands[topic];
 	if (root) return topicHelp(root);
 	const app = findApp(topic);
