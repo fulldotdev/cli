@@ -2,14 +2,16 @@
 
 Use Fulldev apps from a terminal or an AI agent. The CLI discovers the full HTTP API from OpenAPI and is a thin client of the Fulldev MCP server at `https://app.full.dev/mcp`, which has the tools of every app your organization gives you: it reads the tools, their schemas, and the instructions from the server each time, so it stays in step with the apps. Each app's tools start with its name, such as `cms_`.
 
-| App        | For                                                                                                  |
-| ---------- | ---------------------------------------------------------------------------------------------------- |
-| `cms`      | Editing your website through the [Fulldev CMS](https://cms.full.dev)                                 |
-| `connect`  | Your business tools, such as Shopify, through [Fulldev Connect](https://connect.full.dev)            |
-| `scan`     | Scanning websites with [Fulldev Scan](https://scan.full.dev), for administrators only                |
-| `sites`    | A finished website from [Fulldev Sites](https://sites.full.dev), for administrators only             |
-| `pages`    | Reports and plans as web pages with [Fulldev Pages](https://pages.full.dev), for administrators only |
-| `contacts` | The daily copy of your Google contacts with [Fulldev Contacts](https://contacts.full.dev)            |
+| App        | For                                                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `cms`      | Editing your website through the [Fulldev CMS](https://cms.full.dev)                                                       |
+| `connect`  | Your business tools, such as Shopify, through [Fulldev Connect](https://connect.full.dev)                                  |
+| `scan`     | Scanning websites with [Fulldev Scan](https://scan.full.dev), for administrators only                                      |
+| `sites`    | A finished website from [Fulldev Sites](https://sites.full.dev), for administrators only                                   |
+| `pages`    | Reports and plans as web pages with [Fulldev Pages](https://pages.full.dev), for administrators only                       |
+| `contacts` | [Daily synchronization of your Google contacts across multiple accounts with Import and Export](https://contacts.full.dev) |
+| `send`     | [Customer message scenarios and deliveries](https://send.full.dev)                                                         |
+| `work`     | Tasks, projects and goals in your organization                                                                             |
 
 ## Install
 
@@ -55,7 +57,6 @@ How it works:
 - The CLI is a public OAuth client that needs no registration: its client id is the address of its [Client ID Metadata Document](https://full.dev/oauth/cli.json), which the authorization server at `https://app.full.dev/api/auth` reads. It never registers a client, so sign-in to a server that does not support such documents fails with `CLIENT_METADATA_UNSUPPORTED`.
 - Tokens are stored in the OS keychain (macOS Keychain, Windows Credential Manager, or the Secret Service on Linux) under the service `fulldev`, one entry per server. Where no keychain is available, such as in many containers and CI runners, they go to `~/.config/fulldev/auth.json` (or `$XDG_CONFIG_HOME/fulldev/auth.json`), readable only by you; `fulldev status` says which one is used.
 - Access tokens are refreshed when they expire. Parallel commands take turns through a lock file next to it, so they never refresh the same token twice.
-- Sign-ins from fulldev 0.3 and earlier were per app and made with Clerk, and no longer work: run `fulldev login` again.
 
 Commands never start a sign-in without a terminal (when stdin or stdout is not a TTY): they fail at once with exit code 3 and say to run `fulldev login`. At a terminal they open the browser sign-in themselves; `--no-login` turns that off.
 
@@ -152,5 +153,3 @@ fulldev contacts api accounts.list --file input.json --org my-company
 ```
 
 Use an operation id from `fulldev api <app>`. Input is a JSON object, a file with `--file`, or stdin with `-`. Reads send query parameters; changes send JSON. Existing OAuth credentials and organization grants cover both interfaces. The CLI refuses redirects and paths outside the selected app before sending credentials. Servers without OpenAPI continue to support the existing MCP commands.
-
-Send and Work are also available as `fulldev send` and `fulldev work`.
