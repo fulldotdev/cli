@@ -9,7 +9,7 @@ Use Fulldev apps from a terminal or an AI agent. The CLI discovers the full HTTP
 | `scan`     | Scanning websites with [Fulldev Scan](https://scan.full.dev), for administrators only                |
 | `sites`    | A finished website from [Fulldev Sites](https://sites.full.dev), for administrators only             |
 | `pages`    | Reports and plans as web pages with [Fulldev Pages](https://pages.full.dev), for administrators only |
-| `contacts` | Daily synchronization of your Google contacts across multiple accounts.                              |
+| `contacts` | Daily synchronization of your Google contacts across multiple accounts with Import and Export.       |
 | `send`     | Customer message scenarios and deliveries.                                                           |
 | `work`     | Tasks, projects and goals in your organization.                                                      |
 
