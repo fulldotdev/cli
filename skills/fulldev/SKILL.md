@@ -22,7 +22,7 @@ The `fulldev` CLI uses the shared HTTP APIs and the Fulldev MCP server, which ha
 
 ## HTTP API
 
-Use `fulldev api <app>` to discover the HTTP operations and `fulldev api <app>.<operation> '<json>' --org <slug>` to call one. MCP shortcuts expose the curated tools; HTTP discovery exposes the app's supported API operations. Authentication and permissions are shared.
+Use `fulldev api <app>` to discover the HTTP operations and `fulldev api <app>.<operation> '<json>' --org <slug>` to call one. Discovery requires the server's OpenAPI specification. If it reports `API_UNAVAILABLE`, use the app's MCP commands instead. MCP shortcuts expose the curated tools; HTTP discovery exposes the app's supported API operations. Authentication and permissions are shared.
 
 ## Run
 
