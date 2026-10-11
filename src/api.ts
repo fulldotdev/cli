@@ -101,9 +101,18 @@ export async function runApi(
       signal: AbortSignal.timeout(120_000),
     })
   }
+  const authenticated = async () => {
+    let response = await attempt()
+    if (response.status === 401) {
+      await auth.onUnauthorized({ fetchFn })
+      response = await attempt()
+    }
+    if (response.status === 401) throw new SignInRequiredError(target)
+    return response
+  }
   let response: Response
   try {
-    response = await attempt()
+    response = await authenticated()
   } catch (error) {
     if (
       !(error instanceof SignInRequiredError) ||
@@ -115,13 +124,8 @@ export async function runApi(
       browser: command.session.browser,
       log: (line) => io.stderr(`${line}\n`),
     })
-    response = await attempt()
+    response = await authenticated()
   }
-  if (response.status === 401) {
-    await auth.onUnauthorized({ fetchFn })
-    response = await attempt()
-  }
-  if (response.status === 401) throw new SignInRequiredError(target)
   const body: unknown =
     response.status === 204
       ? null

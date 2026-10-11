@@ -2,17 +2,21 @@ import { describe, expect, it, vi, beforeEach } from "vite-plus/test"
 
 import { runApi } from "./api.ts"
 import { parseCommandLine } from "./args.ts"
+import { SignInRequiredError } from "./errors.ts"
 import type { Io } from "./main.ts"
 import { CredentialStore } from "./credentials.ts"
 
 const token = vi.hoisted(() =>
   vi.fn(async () => "private-token" as string | undefined),
 )
+const refresh = vi.hoisted(() => vi.fn(async () => {}))
+const login = vi.hoisted(() => vi.fn(async () => {}))
 vi.mock("./oauth.ts", () => ({
   StoredTokenAuth: class {
     token = token
+    onUnauthorized = refresh
   },
-  browserLogin: vi.fn(),
+  browserLogin: login,
 }))
 
 const io: Io = {
@@ -38,6 +42,8 @@ const command = (args: Array<string>) => {
 
 beforeEach(() => {
   token.mockReset().mockResolvedValue("private-token")
+  refresh.mockReset().mockResolvedValue(undefined)
+  login.mockReset().mockResolvedValue(undefined)
 })
 
 describe("HTTP API command", () => {
@@ -148,6 +154,50 @@ describe("HTTP API command", () => {
       runApi(command(["api", "contacts.records.list"]), io, fetchFn),
     ).rejects.toMatchObject({ code: "SIGN_IN_REQUIRED" })
     expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+  it("starts interactive login when a rejected token cannot be refreshed", async () => {
+    const parsed = command(["api", "contacts.records.list"])
+    refresh.mockRejectedValueOnce(new SignInRequiredError(parsed.target))
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(spec))
+      .mockResolvedValueOnce(Response.json({}, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ records: [] }))
+    expect(await runApi(parsed, { ...io, interactive: true }, fetchFn)).toEqual(
+      { records: [] },
+    )
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+  it("starts login if a refreshed token is also rejected, with bounded retries", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(spec))
+      .mockResolvedValueOnce(Response.json({}, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({}, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ records: [] }))
+    expect(
+      await runApi(
+        command(["api", "contacts.records.list"]),
+        { ...io, interactive: true },
+        fetchFn,
+      ),
+    ).toEqual({ records: [] })
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(fetchFn).toHaveBeenCalledTimes(4)
+  })
+  it("respects --no-login when a rejected token cannot be refreshed", async () => {
+    const parsed = command(["api", "contacts.records.list", "--no-login"])
+    refresh.mockRejectedValueOnce(new SignInRequiredError(parsed.target))
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(spec))
+      .mockResolvedValueOnce(Response.json({}, { status: 401 }))
+    await expect(
+      runApi(parsed, { ...io, interactive: true }, fetchFn),
+    ).rejects.toMatchObject({ code: "SIGN_IN_REQUIRED" })
+    expect(login).not.toHaveBeenCalled()
+    expect(fetchFn).toHaveBeenCalledTimes(2)
   })
   it("reports non-JSON gateway errors without retrying a mutation", async () => {
     const fetchFn = vi.fn<typeof fetch>(async (url) =>

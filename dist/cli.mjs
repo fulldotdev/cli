@@ -827,22 +827,26 @@ async function runApi(command, io, fetchFn = fetch) {
 			signal: AbortSignal.timeout(12e4)
 		});
 	};
+	const authenticated = async () => {
+		let response = await attempt();
+		if (response.status === 401) {
+			await auth.onUnauthorized({ fetchFn });
+			response = await attempt();
+		}
+		if (response.status === 401) throw new SignInRequiredError(target);
+		return response;
+	};
 	let response;
 	try {
-		response = await attempt();
+		response = await authenticated();
 	} catch (error) {
 		if (!(error instanceof SignInRequiredError) || !io.interactive || !command.session.login) throw error;
 		await browserLogin(target, io.store, {
 			browser: command.session.browser,
 			log: (line) => io.stderr(`${line}\n`)
 		});
-		response = await attempt();
+		response = await authenticated();
 	}
-	if (response.status === 401) {
-		await auth.onUnauthorized({ fetchFn });
-		response = await attempt();
-	}
-	if (response.status === 401) throw new SignInRequiredError(target);
 	const body = response.status === 204 ? null : await response.json().catch(() => {
 		throw new CliError("API_FAILED", `API returned a non-JSON response (${response.status}).`);
 	});
