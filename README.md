@@ -101,12 +101,11 @@ fulldev cms call read_file '{"branchId":"<id>","path":"src/content/home.md"}' --
 fulldev pages call export_page_markdown '{"pageId":"<id>"}' --raw markdown > page.md
 ```
 
-To change a task's notes only when nobody else did, read them first and send them back as `expectedNotes`; without it, the update works as before:
+To change a task's notes only when nobody else did, read them first and send back the `notesVersion` from that same result as `expectedNotesVersion`. This short token also works for large notes; without a guard, the update works as before:
 
 ```sh
-fulldev work call get_task '{"taskId":"<id>"}' --raw notes > base.md
-cp base.md notes.md   # edit notes.md
-fulldev work call update_task '{"taskId":"<id>"}' --text-file expectedNotes=base.md --text-file notes=notes.md
+fulldev work call get_task '{"taskId":"<id>"}'
+fulldev work call update_task '{"taskId":"<id>","expectedNotesVersion":"<notesVersion>"}' --text-file notes=notes.md
 ```
 
 - A field is a dotted path, such as `content.blocks.0.markdown`. Objects on the way are made; arrays must be in the JSON, with the item.

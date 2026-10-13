@@ -104,15 +104,14 @@ fulldev pages call export_page_markdown '{"pageId":"<id>"}' --raw markdown > pag
 
 The page export is for reading: it does not hold every block, so never publish it back as the page.
 
-To change a task's notes without overwriting someone else's change, send the notes you read as `expectedNotes`:
+To change a task's notes without overwriting someone else's change, send the `notesVersion` from the same result as the notes you read as `expectedNotesVersion`. This short token also works for large notes:
 
 ```sh
-fulldev work call get_task '{"taskId":"<id>"}' --raw notes > base.md
-cp base.md notes.md   # edit notes.md
-fulldev work call update_task '{"taskId":"<id>"}' --text-file expectedNotes=base.md --text-file notes=notes.md
+fulldev work call get_task '{"taskId":"<id>"}'
+fulldev work call update_task '{"taskId":"<id>","expectedNotesVersion":"<notesVersion>"}' --text-file notes=notes.md
 ```
 
-On a conflict, read again and redo the change; never drop `expectedNotes`, `expectedVersion` or `expectedRevision` to force it.
+On a conflict, read again and redo the change; never drop `expectedNotesVersion`, `expectedNotes`, `expectedVersion` or `expectedRevision` to force it.
 
 ## Forms in the CMS
 
