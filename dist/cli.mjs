@@ -468,8 +468,9 @@ function parseTextFiles(specs, json) {
 /** A text file's exact content; no trimming and no newline changes. */
 async function readText(path, readStdin) {
 	let bytes;
-	try {
-		bytes = path === "-" ? await readStdin() : await readFile(path);
+	if (path === "-") bytes = await readStdin();
+	else try {
+		bytes = await readFile(path);
 	} catch (error) {
 		throw new UsageError(`Cannot read ${path}: ${error.code ?? error.message}`);
 	}

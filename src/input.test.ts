@@ -125,6 +125,13 @@ describe("--text-file", () => {
     ).toEqual({ taskId: "t", notes: "New notes\n" })
   })
 
+  it("preserves stdin read failures for both input modes", async () => {
+    const failure = new Error("input stream failed")
+    const readStdin = () => Promise.reject(failure)
+    await expect(read("-", [], readStdin)).rejects.toBe(failure)
+    await expect(read("{}", ["notes=-"], readStdin)).rejects.toBe(failure)
+  })
+
   it.each([
     ["__proto__.polluted=x"],
     ["constructor.prototype.polluted=x"],

@@ -63,13 +63,15 @@ export function parseTextFiles(
 /** A text file's exact content; no trimming and no newline changes. */
 async function readText(path: string, readStdin: () => Promise<Uint8Array>) {
   let bytes: Uint8Array
-  try {
-    bytes = path === "-" ? await readStdin() : await readFile(path)
-  } catch (error) {
-    throw new UsageError(
-      `Cannot read ${path}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
-    )
-  }
+  if (path === "-") bytes = await readStdin()
+  else
+    try {
+      bytes = await readFile(path)
+    } catch (error) {
+      throw new UsageError(
+        `Cannot read ${path}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`,
+      )
+    }
   try {
     return exact.decode(bytes)
   } catch {
