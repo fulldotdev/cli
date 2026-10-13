@@ -5,7 +5,7 @@ import { UsageError } from "./errors.ts"
 import { apps, findApp, resolveTarget, server, toolName } from "./apps.ts"
 
 describe("apps", () => {
-  it("has cms, connect, scan, sites, pages and contacts on the one server", () => {
+  it("has every app of the one server", () => {
     expect(apps.map(({ name }) => name)).toEqual([
       "cms",
       "connect",
@@ -14,6 +14,7 @@ describe("apps", () => {
       "pages",
       "contacts",
       "send",
+      "meet",
       "work",
     ])
     expect(server.url).toBe("https://app.full.dev/mcp")

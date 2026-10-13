@@ -1,6 +1,10 @@
 import { parseArgs } from "node:util"
 
 import { UsageError } from "./errors.ts"
+import { parseField } from "./fields.ts"
+import type { Field } from "./fields.ts"
+import { parseTextFiles } from "./input.ts"
+import type { TextFile } from "./input.ts"
 import {
   apps,
   findApp,
@@ -20,6 +24,9 @@ export type Command =
       operation?: string
       json?: string
       file?: string
+      textFiles?: Array<TextFile>
+      /** Print this text field of the result as it is, instead of JSON. */
+      raw?: Field
       organization?: string
     }
   | { kind: "help"; topic: string }
@@ -45,6 +52,9 @@ export type Command =
       tool: string
       json?: string
       file?: string
+      textFiles?: Array<TextFile>
+      /** Print this text field of the result as it is, instead of JSON. */
+      raw?: Field
       /** The organization to work in, by slug or id. */
       organization?: string
       /** Every organization of the sign-in that has the tool's app. */
@@ -70,6 +80,8 @@ export interface Session {
 type Option =
   | "url"
   | "file"
+  | "text-file"
+  | "raw"
   | "timeout"
   | "login"
   | "browser"
@@ -83,13 +95,22 @@ interface Topic {
   details?: string
 }
 
+const textDetails = `
+--text-file <field>=<path> puts a file's exact text in one field of the
+input, such as content=page.md or changes.0.content=page.md; - reads stdin.
+Nothing is trimmed or changed. The JSON must leave that field out; objects
+on the way are made, arrays must be in the JSON. --raw <field> prints one
+text field of the result exactly, without JSON quotes or an added newline.`
+
 const apiTopic: Topic = {
   usage:
     "fulldev api <app>[.<operation>] [JSON | -] [--file <path>] [--org <slug>]",
   summary: "List or call an operation of the app's OpenAPI API",
-  options: ["url", "file", "org", "login", "browser"],
-  details:
-    "Without an operation, lists the API operations and their schemas. Calls use the same login and organization grants as MCP. Data is JSON on stdout; errors go to stderr.",
+  options: ["url", "file", "text-file", "raw", "org", "login", "browser"],
+  details: `Without an operation, lists the API operations and their schemas. Calls
+use the same login and organization grants as MCP. Data is JSON on stdout;
+errors go to stderr.
+${textDetails}`,
 }
 
 const organizationDetails = `
@@ -151,10 +172,20 @@ annotations. Each app's tools start with its name, such as cms_.`,
   call: {
     usage: "fulldev call <tool> [json | -] [--file <path>] [--org <slug>]",
     summary: "Call a tool with a JSON object",
-    options: ["file", "org", "all-orgs", "url", "login", "browser"],
+    options: [
+      "file",
+      "text-file",
+      "raw",
+      "org",
+      "all-orgs",
+      "url",
+      "login",
+      "browser",
+    ],
     details: `The tool's input is a JSON object: the argument, a file with --file, or
 stdin with -. Without input it sends {}. Prints the tool's result as JSON on
 stdout. When the tool fails, prints its error on stderr and exits with 1.
+${textDetails}
 ${organizationDetails}`,
   },
   help: {
@@ -185,12 +216,22 @@ description, input schema, output schema and annotations.`,
     usage:
       "fulldev <app> call <tool> [json | -] [--file <path>] [--org <slug>]",
     summary: "Call one of the app's tools with a JSON object",
-    options: ["file", "org", "all-orgs", "url", "login", "browser"],
+    options: [
+      "file",
+      "text-file",
+      "raw",
+      "org",
+      "all-orgs",
+      "url",
+      "login",
+      "browser",
+    ],
     details: `The tool's name may leave out the app's prefix: fulldev cms call
 list_repositories calls cms_list_repositories. Its input is a JSON object:
 the argument, a file with --file, or stdin with -. Without input it sends
 {}. Prints the tool's result as JSON on stdout. When the tool fails, prints
 its error on stderr and exits with 1.
+${textDetails}
 ${organizationDetails}`,
   },
 }
@@ -208,6 +249,9 @@ line on stderr each round, then prints the result. After --timeout minutes
 const optionHelp: Record<Option, string> = {
   url: "--url <mcp url>      Use another server, such as a deploy preview's",
   file: "-f, --file <path>    Read the tool's JSON input from a file",
+  "text-file": `--text-file <field>=<path>
+                       Put a file's exact text in a field; - reads stdin`,
+  raw: "--raw <field>        Print a text field of the result as it is",
   timeout: "--timeout <minutes>  How long to wait (default 30)",
   login: "--no-login           Fail with exit code 3 instead of signing in",
   browser:
@@ -347,6 +391,25 @@ function closestTopic(words: Array<string>) {
 const helpFor = (topic: string) =>
   topic ? `fulldev ${topic} --help` : "fulldev --help"
 
+/** --text-file and --raw, with errors that point to the command's help. */
+function textOptions(
+  values: { "text-file"?: Array<string>; raw?: string },
+  json: string | undefined,
+  topic: string,
+) {
+  try {
+    return {
+      textFiles: parseTextFiles(values["text-file"] ?? [], json),
+      raw:
+        values.raw === undefined ? undefined : parseField(values.raw, "--raw"),
+    }
+  } catch (error) {
+    if (error instanceof UsageError)
+      throw new UsageError(error.message, helpFor(topic))
+    throw error
+  }
+}
+
 export function parseCommandLine(
   argv: Array<string>,
   env: NodeJS.ProcessEnv = process.env,
@@ -361,6 +424,8 @@ export function parseCommandLine(
       options: {
         url: { type: "string" },
         file: { type: "string", short: "f" },
+        "text-file": { type: "string", multiple: true },
+        raw: { type: "string" },
         org: { type: "string" },
         "all-orgs": { type: "boolean" },
         timeout: { type: "string" },
@@ -439,7 +504,10 @@ export function parseCommandLine(
     const operation =
       first === "api" ? words[0]?.split(".").slice(1).join(".") : words[0]
     if (words.length > 2) throw new UsageError(`Usage: ${apiTopic.usage}`)
-    if (!operation && (words[1] || values.file))
+    if (
+      !operation &&
+      (words[1] || values.file || values["text-file"] || values.raw)
+    )
       throw new UsageError("Choose an API operation before giving arguments.")
     return {
       kind: "api",
@@ -449,6 +517,7 @@ export function parseCommandLine(
       operation: operation || undefined,
       json: words[1],
       file: values.file,
+      ...textOptions(values, words[1], "api"),
       organization: values.org,
     }
   }
@@ -488,6 +557,11 @@ export function parseCommandLine(
           "Use --org or --all-orgs, not both.",
           helpFor(topic),
         )
+      if (values.raw !== undefined && values["all-orgs"])
+        throw new UsageError(
+          "--raw prints one result; use it with --org, not --all-orgs.",
+          helpFor(topic),
+        )
       return {
         kind: "call",
         target,
@@ -495,6 +569,7 @@ export function parseCommandLine(
         tool: app ? toolName(app, args[0]!) : args[0]!,
         json: args[1],
         file: values.file,
+        ...textOptions(values, args[1], topic),
         organization: values.org,
         allOrganizations: values["all-orgs"],
       }

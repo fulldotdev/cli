@@ -1,6 +1,6 @@
 ---
 name: fulldev
-description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use send for customer message scenarios and deliveries. Use work for tasks, projects and goals in their organization. Use contacts when they want to check, start, pause or resume the daily synchronization of their Google contacts across multiple accounts with Import and Export in Fulldev Contacts, or answer its look-alike questions.
+description: Use the Fulldev CLI to work with Fulldev apps for the person. Use cms when they want to change their Fulldev website, such as text, pages, images, prices, opening hours, or contact details, or publish a change. Use connect when they want to use their business tools, such as Shopify, through Fulldev Connect. Use scan to scan websites, only for Fulldev administrators. Use sites when they want Fulldev to make a new website from a brief, only for Fulldev administrators for now. Use pages to publish a report or plan as a clear web page, only for Fulldev administrators for now. Use send for customer message scenarios and deliveries. Use meet to read their meetings, transcripts and screenshots for follow-up. Use work for tasks, projects and goals in their organization. Use contacts when they want to check, start, pause or resume the daily synchronization of their Google contacts across multiple accounts with Import and Export in Fulldev Contacts, or answer its look-alike questions.
 license: MIT
 compatibility: Needs Node.js 24 or later and network access to app.full.dev.
 ---
@@ -18,6 +18,7 @@ The `fulldev` CLI uses the shared HTTP APIs and the Fulldev MCP server, which ha
 | `pages`    | Publishing a report or plan as a web page with Fulldev Pages. Only for Fulldev administrators for now.                                       |
 | `contacts` | Daily synchronization of Google contacts across multiple accounts with Import and Export: runs, look-alike questions, pausing and resuming.  |
 | `send`     | Customer message scenarios and deliveries.                                                                                                   |
+| `meet`     | The person's meetings, transcripts, recording coverage and screenshots, for follow-up.                                                       |
 | `work`     | Tasks, projects and goals in their organization.                                                                                             |
 
 ## HTTP API
@@ -81,7 +82,7 @@ Read `fulldev <app> tools <name>` before the first call to a tool.
 
 ## Call tools
 
-Give a tool's input as a JSON argument, from a file with `--file`, or from stdin with `-`. Use stdin or `--file` for long or quoted text, so the shell does not change it.
+Give a tool's input as a JSON argument, from a file with `--file`, or from stdin with `-`. Put Markdown and other long text in its field with `--text-file <field>=<path>`, so it arrives exactly as written.
 
 ```sh
 fulldev cms call list_repositories
@@ -90,6 +91,28 @@ fulldev cms call commit_files - <<'JSON'
 {"branchId":"<id>","expectedRevision":"<revision>","changes":[{"path":"src/content/home.md","edits":[{"oldText":"Open 9 to 5","newText":"Open 8 to 6"}]}]}
 JSON
 ```
+
+## Exact text
+
+`--text-file <field>=<path>` puts a file's exact text in one field of the input; `-` reads stdin. Leave that field out of the JSON; arrays and their items must be in it. `--raw <field>` prints one text field of the result as it is, for a file. Both work with `call` and `api`.
+
+```sh
+fulldev cms call read_file '{"branchId":"<id>","path":"src/content/home.md"}' --raw content > home.md
+fulldev cms call commit_files '{"branchId":"<id>","expectedRevision":"<revision>","changes":[{"path":"src/content/home.md"}]}' --text-file changes.0.content=home.md
+fulldev pages call export_page_markdown '{"pageId":"<id>"}' --raw markdown > page.md
+```
+
+The page export is for reading: it does not hold every block, so never publish it back as the page.
+
+To change a task's notes without overwriting someone else's change, send the notes you read as `expectedNotes`:
+
+```sh
+fulldev work call get_task '{"taskId":"<id>"}' --raw notes > base.md
+cp base.md notes.md   # edit notes.md
+fulldev work call update_task '{"taskId":"<id>"}' --text-file expectedNotes=base.md --text-file notes=notes.md
+```
+
+On a conflict, read again and redo the change; never drop `expectedNotes`, `expectedVersion` or `expectedRevision` to force it.
 
 ## Forms in the CMS
 

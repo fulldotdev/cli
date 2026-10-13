@@ -19,6 +19,8 @@ import {
   exitCodes,
   isSignInRequired,
 } from "./errors.ts"
+import { getText } from "./fields.ts"
+import type { Field } from "./fields.ts"
 import { waitForForm } from "./form-wait.ts"
 import { readToolArguments } from "./input.ts"
 import {
@@ -44,6 +46,10 @@ export interface Io {
 const requestTimeoutMs = 120_000
 
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`
+
+/** A result as JSON, or with --raw one text field of it exactly as it is. */
+const output = (value: unknown, raw: Field | undefined) =>
+  raw ? getText(value, raw) : json(value)
 
 /** A rejected or expired sign-in, from any layer, becomes SignInRequiredError. */
 function signInError(error: unknown, target: Target) {
@@ -345,7 +351,7 @@ async function run(command: Command, io: Io): Promise<number> {
       return status(command.target, io)
     case "api": {
       const data = await runApi(command, io)
-      io.stdout(json(data))
+      io.stdout(output(data, command.raw))
       return exitCodes.ok
     }
     case "instructions": {
@@ -402,6 +408,7 @@ async function run(command: Command, io: Io): Promise<number> {
       const args = await readToolArguments({
         json: command.json,
         file: command.file,
+        textFiles: command.textFiles,
       })
       if (command.allOrganizations) return callInEvery(command, args, io)
       if (command.organization !== undefined)
@@ -420,7 +427,7 @@ async function run(command: Command, io: Io): Promise<number> {
         io.stderr(json(toolError(result)))
         return exitCodes.error
       }
-      io.stdout(json(toolOutput(result)))
+      io.stdout(output(toolOutput(result), command.raw))
       return exitCodes.ok
     }
     case "form-wait": {

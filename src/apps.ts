@@ -64,6 +64,12 @@ export const apps: Array<App> = [
     description: "Manage customer message scenarios and their deliveries.",
   },
   {
+    name: "meet",
+    title: "Fulldev Meet",
+    description:
+      "Read your meetings, transcripts, recording coverage and screenshots for follow-up.",
+  },
+  {
     name: "work",
     title: "Fulldev Work",
     description: "Plan tasks, projects and goals in your organization.",

@@ -1,6 +1,6 @@
 import type { Command } from "./args.ts"
 import type { Io } from "./main.ts"
-import { CliError, SignInRequiredError } from "./errors.ts"
+import { CliError, SignInRequiredError, exitCodes } from "./errors.ts"
 import { readToolArguments } from "./input.ts"
 import { StoredTokenAuth, browserLogin } from "./oauth.ts"
 
@@ -61,6 +61,7 @@ export async function runApi(
   const input = await readToolArguments({
     json: command.json,
     file: command.file,
+    textFiles: command.textFiles,
   })
   const payload = { ...input }
   const path = operation.path.replace(/\{([^{}]+)\}/g, (_, name: string) => {
@@ -154,15 +155,25 @@ export async function runApi(
           )
         })
   if (!response.ok) {
-    const failure = body as {
-      code?: string
-      message?: string
-      error?: { code?: string; message?: string }
-    } | null
-    const error = failure?.error ?? failure ?? {}
+    // {"error":{...}} from the server, or an oRPC error with its data, such as
+    // a conflict's current version: everything but code and message stays.
+    const record = (value: unknown) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined
+    const {
+      code,
+      message,
+      defined: _defined,
+      ...details
+    } = record(record(body)?.error) ?? record(body) ?? {}
     throw new CliError(
-      error.code ?? "API_FAILED",
-      error.message ?? `API request failed (${response.status}).`,
+      typeof code === "string" ? code : "API_FAILED",
+      typeof message === "string"
+        ? message
+        : `API request failed (${response.status}).`,
+      exitCodes.error,
+      { status: response.status, ...details },
     )
   }
   return body

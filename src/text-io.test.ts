@@ -1,0 +1,281 @@
+import { mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+import type * as McpClient from "@modelcontextprotocol/client"
+import type { CallToolResult } from "@modelcontextprotocol/client"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
+
+import type { CredentialStore } from "./credentials.ts"
+import { main } from "./main.ts"
+import type * as OAuth from "./oauth.ts"
+
+const callTool = vi.hoisted(() => vi.fn())
+const connect = vi.hoisted(() => vi.fn())
+vi.mock("@modelcontextprotocol/client", async (original) => ({
+  ...(await original<typeof McpClient>()),
+  Client: class {
+    connect = connect
+    callTool = callTool
+    close = async () => {}
+  },
+  StreamableHTTPClientTransport: class {},
+}))
+vi.mock("./oauth.ts", async (original) => ({
+  ...(await original<typeof OAuth>()),
+  StoredTokenAuth: class {
+    token = async () => "private-token"
+    onUnauthorized = async () => {}
+  },
+}))
+
+const signedIn = {
+  get: async () => ({ tokens: { access_token: "t", token_type: "Bearer" } }),
+} as unknown as CredentialStore
+
+async function run(argv: Array<string>) {
+  let stdout = ""
+  let stderr = ""
+  const code = await main(argv, {
+    stdout: (text) => {
+      stdout += text
+    },
+    stderr: (text) => {
+      stderr += text
+    },
+    interactive: false,
+    env: {},
+    store: signedIn,
+  })
+  return { code, stdout, stderr }
+}
+
+const markdown = "# Plan\r\n\r\n\t- Café ✓ 👩🏽‍💻\n  indented\n\n"
+
+async function textFile(content: string) {
+  const path = join(await mkdtemp(join(tmpdir(), "fulldev-text-")), "page.md")
+  await writeFile(path, content)
+  return path
+}
+
+const structured = (data: Record<string, unknown>): CallToolResult => ({
+  content: [{ type: "text", text: JSON.stringify(data) }],
+  structuredContent: data,
+})
+
+beforeEach(() => {
+  connect.mockReset().mockResolvedValue(undefined)
+  callTool.mockReset()
+})
+
+describe("call with --text-file and --raw", () => {
+  it("sends the exact text with the JSON input, its version and organization", async () => {
+    callTool.mockResolvedValue(structured({ pageId: "p", version: 8 }))
+    const path = await textFile(markdown)
+    const { code, stdout } = await run([
+      "pages",
+      "call",
+      "update_page",
+      '{"pageId":"p","expectedVersion":7,"content":{"blocks":[{"type":"text"}]}}',
+      "--text-file",
+      `content.blocks.0.markdown=${path}`,
+      "--org",
+      "acme",
+    ])
+    expect(code).toBe(0)
+    expect(callTool.mock.calls[0]![0]).toEqual({
+      name: "pages_update_page",
+      arguments: {
+        pageId: "p",
+        expectedVersion: 7,
+        content: { blocks: [{ type: "text", markdown }] },
+        organization: "acme",
+      },
+    })
+    expect(stdout).toBe(
+      `${JSON.stringify({ pageId: "p", version: 8 }, null, 2)}\n`,
+    )
+  })
+
+  it("prints a text field of the result exactly, from structured or text content", async () => {
+    callTool.mockResolvedValueOnce(structured({ markdown, version: 3 }))
+    expect(
+      await run(["pages", "call", "export_page_markdown", "--raw", "markdown"]),
+    ).toEqual({ code: 0, stdout: markdown, stderr: "" })
+    callTool.mockResolvedValueOnce({
+      content: [{ type: "text", text: JSON.stringify({ file: { markdown } }) }],
+    })
+    expect(
+      (await run(["cms", "call", "read_file", "--raw", "file.markdown"]))
+        .stdout,
+    ).toBe(markdown)
+    callTool.mockResolvedValueOnce(structured({ notes: "" }))
+    expect(await run(["work", "call", "get_task", "--raw", "notes"])).toEqual({
+      code: 0,
+      stdout: "",
+      stderr: "",
+    })
+  })
+
+  it.each([
+    [{ version: 3 }, /it is missing/],
+    [{ markdown: 3 }, /it is a number/],
+    [{ markdown: null }, /it is null/],
+  ])(
+    "prints nothing on stdout when the field is not text: %j",
+    async (data, message) => {
+      callTool.mockResolvedValue(structured(data))
+      const { code, stdout, stderr } = await run([
+        "pages",
+        "call",
+        "export_page_markdown",
+        "--raw",
+        "markdown",
+      ])
+      expect(code).toBe(1)
+      expect(stdout).toBe("")
+      expect(JSON.parse(stderr).error).toMatchObject({
+        code: "RAW_NOT_TEXT",
+        message: expect.stringMatching(message),
+      })
+    },
+  )
+
+  it("prints a tool's error with its details and nothing on stdout", async () => {
+    const error = {
+      code: "VERSION_CONFLICT",
+      message: "The page changed.",
+      currentVersion: 9,
+    }
+    callTool.mockResolvedValue({
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify({ error }) }],
+    })
+    const { code, stdout, stderr } = await run([
+      "pages",
+      "call",
+      "export_page_markdown",
+      "--raw",
+      "markdown",
+    ])
+    expect(code).toBe(1)
+    expect(stdout).toBe("")
+    expect(JSON.parse(stderr)).toEqual({ error })
+  })
+
+  it.each([
+    [['{"content":"old"}', "--text-file", "content=PATH"], /already has/],
+    [["{}", "--text-file", "__proto__.x=PATH"], /__proto__/],
+    [["-", "--text-file", "content=-"], /stdin/],
+    [
+      ["{}", "--text-file", "content=PATH", "--text-file", "content=PATH"],
+      /twice/,
+    ],
+    [["--raw", "markdown", "--all-orgs"], /--raw/],
+  ])("refuses %j before connecting", async (args, message) => {
+    const path = await textFile("text")
+    const { code, stdout, stderr } = await run([
+      "pages",
+      "call",
+      "update_page",
+      ...args.map((arg) => arg.replace("PATH", path)),
+    ])
+    expect(code).toBe(64)
+    expect(stdout).toBe("")
+    expect(JSON.parse(stderr).error.message).toMatch(message)
+    expect(connect).not.toHaveBeenCalled()
+    expect(callTool).not.toHaveBeenCalled()
+  })
+})
+
+describe("api with --text-file and --raw", () => {
+  const spec = {
+    paths: {
+      "/pages/update": { post: { operationId: "pages.update" } },
+      "/pages/exportMarkdown": {
+        get: { operationId: "pages.exportMarkdown" },
+      },
+    },
+  }
+  const fetchFn = vi.fn<typeof fetch>()
+  beforeEach(() => {
+    fetchFn.mockReset()
+    vi.stubGlobal("fetch", fetchFn)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  const answer = (body: unknown, status = 200) =>
+    fetchFn.mockImplementation(async (url) =>
+      new Request(url).url.endsWith("openapi.json")
+        ? Response.json(spec)
+        : Response.json(body, { status }),
+    )
+
+  it("posts the exact text and prints a raw field", async () => {
+    answer({ markdown, version: 4 })
+    const path = await textFile(markdown)
+    const { code, stdout } = await run([
+      "api",
+      "pages.pages.update",
+      '{"pageId":"p","expectedVersion":3}',
+      "--text-file",
+      `markdown=${path}`,
+      "--raw",
+      "markdown",
+    ])
+    expect(code).toBe(0)
+    expect(stdout).toBe(markdown)
+    const init = fetchFn.mock.calls[1]![1]
+    expect(JSON.parse(init!.body as string)).toEqual({
+      pageId: "p",
+      expectedVersion: 3,
+      markdown,
+    })
+  })
+
+  it("keeps a conflict's details and prints nothing on stdout", async () => {
+    answer(
+      {
+        defined: true,
+        code: "CONFLICT",
+        status: 409,
+        message: "The page changed.",
+        data: { currentVersion: 9 },
+      },
+      409,
+    )
+    const { code, stdout, stderr } = await run([
+      "api",
+      "pages.pages.exportMarkdown",
+      '{"pageId":"p"}',
+      "--raw",
+      "markdown",
+    ])
+    expect(code).toBe(1)
+    expect(stdout).toBe("")
+    expect(JSON.parse(stderr)).toEqual({
+      error: {
+        code: "CONFLICT",
+        message: "The page changed.",
+        status: 409,
+        data: { currentVersion: 9 },
+      },
+    })
+  })
+
+  it("refuses a conflicting text before sending the change", async () => {
+    answer({})
+    const path = await textFile("text")
+    const { code } = await run([
+      "api",
+      "pages.pages.update",
+      '{"markdown":"old"}',
+      "--text-file",
+      `markdown=${path}`,
+    ])
+    expect(code).toBe(64)
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+    expect(new Request(fetchFn.mock.calls[0]![0]).url).toMatch(/openapi\.json$/)
+  })
+})
