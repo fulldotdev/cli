@@ -94,7 +94,7 @@ JSON
 
 ## Exact text
 
-`--text-file <field>=<path>` puts a file's exact text in one field of the input; `-` reads stdin. Leave that field out of the JSON; arrays and their items must be in it. `--raw <field>` prints one text field of the result as it is, for a file. Both work with `call` and `api`.
+`--text-file <field>=<path>` puts a file's exact text in one field of the input; `-` reads stdin. Leave that field out of the JSON; arrays and their items must be in it. `--raw <field>` prints one text field of the result as it is, for a file. Both work with `call` and `api`. When `--raw` fails with `"succeeded": true`, the request went through: take what you need from `result`, such as a new id, and never send it again.
 
 ```sh
 fulldev cms call read_file '{"branchId":"<id>","path":"src/content/home.md"}' --raw content > home.md

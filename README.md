@@ -112,7 +112,8 @@ fulldev work call update_task '{"taskId":"<id>"}' --text-file expectedNotes=base
 - A field is a dotted path, such as `content.blocks.0.markdown`. Objects on the way are made; arrays must be in the JSON, with the item.
 - The JSON leaves that field out, and each field is named once. `-` reads stdin, for one input only.
 - Names such as `__proto__` and `constructor`, an existing field, a missing array item, and text that is not UTF-8 are usage errors (exit 64), before anything is sent.
-- `--raw` exits with 1 and prints nothing on stdout when the field is missing or not text. It does not work with `--all-orgs`.
+- When the tool's output schema or the API's response schema shows the field can never be text, `--raw` refuses before sending (exit 64). It does not work with `--all-orgs`.
+- When the request succeeded but its field is missing or not text, `--raw` prints nothing on stdout and exits with 1. The error has `"succeeded": true` and the full `result`, such as a new page's id: use it, and do not send the request again.
 
 `fulldev cms form wait` keeps calling `cms_wait_for_form` until the person sends the form, with a progress line on stderr each round, then prints the result. After `--timeout` minutes (default 30) it stops, also in the middle of a request, prints the form id, and exits with 2, so you can run it again.
 

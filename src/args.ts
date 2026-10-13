@@ -100,7 +100,10 @@ const textDetails = `
 input, such as content=page.md or changes.0.content=page.md; - reads stdin.
 Nothing is trimmed or changed. The JSON must leave that field out; objects
 on the way are made, arrays must be in the JSON. --raw <field> prints one
-text field of the result exactly, without JSON quotes or an added newline.`
+text field of the result exactly, without JSON quotes or an added newline.
+It refuses before sending when the output schema rules that field out. When
+a request succeeded but the field is not text, the error has "succeeded"
+and the full "result": do not send it again.`
 
 const apiTopic: Topic = {
   usage:

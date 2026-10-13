@@ -363,16 +363,83 @@ function setText(input, field, text) {
 		container = container[segment];
 	}
 }
-/** The text at `field` of a result, or an error that names what is there. */
-function getText(value, field) {
-	let current = value;
+/**
+* --raw: the text at `field` of a successful request's result. When it is
+* not text, the error says the request succeeded and keeps its result, such
+* as a new page's id, so nobody sends a change twice.
+*/
+function rawText(result, field, readOnly) {
+	let current = result;
 	for (const segment of field) {
 		current = Array.isArray(current) && index.test(segment) ? current[Number(segment)] : isRecord(current) && Object.hasOwn(current, segment) ? current[segment] : void 0;
 		if (current === void 0) break;
 	}
 	if (typeof current === "string") return current;
 	const kind = current === void 0 ? "missing" : current === null ? "null" : Array.isArray(current) ? "an array" : typeof current === "object" ? "an object" : `a ${typeof current}`;
-	throw new CliError("RAW_NOT_TEXT", `--raw ${fieldName(field)} needs text in the result, and it is ${kind}.`);
+	const name = fieldName(field);
+	throw new CliError("RAW_NOT_TEXT", `The request succeeded${readOnly ? "" : " and any change it made is kept"}, but --raw ${name} needs text, and the result's ${name} is ${kind}. The full result is under "result"${readOnly ? "." : "; do not send the request again."}`, exitCodes.error, {
+		succeeded: true,
+		result
+	});
+}
+const article = (type) => type === "null" ? "null" : /^[aeiou]/.test(type) ? `an ${type}` : `a ${type}`;
+/** A local reference such as #/$defs/page or #/components/schemas/Page. */
+function resolve(root, ref) {
+	if (ref !== "#" && !ref.startsWith("#/")) return void 0;
+	let node = root;
+	for (const part of ref === "#" ? [] : ref.slice(2).split("/")) {
+		const key = part.replaceAll("~1", "/").replaceAll("~0", "~");
+		if (!isRecord(node) && !Array.isArray(node) || !Object.hasOwn(node, key)) return void 0;
+		node = node[key];
+	}
+	return node;
+}
+/**
+* Why a declared output schema rules out text at `field`, or undefined when
+* it may be text. It trusts only what the schema proves: types, properties
+* closed with additionalProperties false, array items, local $refs, and
+* unions whose every branch rules it out. An open object, a pattern or an
+* unknown keyword may hold text.
+*/
+function ruledOutText(schema, field, root = schema) {
+	let budget = 200;
+	const visit = (node, position) => {
+		if (--budget < 0 || !isRecord(node)) return void 0;
+		if (typeof node.$ref === "string") return visit(resolve(root, node.$ref), position);
+		if (Array.isArray(node.allOf)) {
+			const ruled = node.allOf.map((branch) => visit(branch, position)).find((reason) => reason !== void 0);
+			if (ruled) return ruled;
+		}
+		for (const branches of [node.anyOf, node.oneOf]) {
+			if (!Array.isArray(branches) || branches.length === 0) continue;
+			const reasons = branches.map((branch) => visit(branch, position));
+			if (reasons.every((reason) => reason !== void 0)) return reasons[0];
+		}
+		const types = typeof node.type === "string" ? [node.type] : Array.isArray(node.type) ? node.type.filter((type) => typeof type === "string") : void 0;
+		const at = fieldName(field.slice(0, position)) || "the result";
+		const is = () => `${at} is ${types.map(article).join(" or ")}`;
+		const segment = field[position];
+		if (segment === void 0) return types && !types.includes("string") ? is() : void 0;
+		const reasons = [];
+		if (!types || types.includes("object")) {
+			const properties = isRecord(node.properties) ? node.properties : {};
+			const composed = [
+				"allOf",
+				"anyOf",
+				"oneOf",
+				"patternProperties"
+			].some((key) => node[key] !== void 0);
+			reasons.push(Object.hasOwn(properties, segment) ? visit(properties[segment], position + 1) : composed ? void 0 : node.additionalProperties === false ? `${at} has no ${segment}` : visit(node.additionalProperties, position + 1));
+		}
+		if (index.test(segment) && (!types || types.includes("array"))) {
+			const item = Number(segment);
+			const prefix = Array.isArray(node.prefixItems) ? node.prefixItems : [];
+			reasons.push(item < prefix.length ? visit(prefix[item], position + 1) : node.items === false ? `${at} has no item ${segment}` : visit(node.items, position + 1));
+		}
+		if (reasons.length === 0) return `${is()}, so it has no ${segment}`;
+		return reasons.every((reason) => reason !== void 0) ? reasons[0] : void 0;
+	};
+	return visit(schema, 0);
 }
 //#endregion
 //#region src/input.ts
@@ -899,10 +966,16 @@ async function runApi(command, io, fetchFn = fetch) {
 		signal: AbortSignal.timeout(3e4)
 	});
 	if (!specResponse.ok) throw new CliError("API_UNAVAILABLE", "This server does not expose the app's OpenAPI specification.");
-	const operations = apiOperations(await specResponse.json());
+	const spec = await specResponse.json();
+	const operations = apiOperations(spec);
 	if (!command.operation) return operations;
 	const operation = operations.find((candidate) => candidate.operationId === command.operation);
 	if (!operation) throw new CliError("NOT_FOUND", `Unknown API operation: ${command.operation}. Run fulldev api ${app.name}.`);
+	const { raw } = command;
+	if (raw) {
+		const reasons = Object.entries(operation.responses ?? {}).filter(([status]) => status.startsWith("2")).map(([, response]) => ruledOutText(response.content?.["application/json"]?.schema, raw, spec));
+		if (reasons.length > 0 && reasons.every((reason) => reason !== void 0)) throw new UsageError(`--raw ${fieldName(raw)} can never be text: the API's response schema says ${reasons[0]}. Nothing was sent.`, `fulldev api ${app.name}`);
+	}
 	const input = await readToolArguments({
 		json: command.json,
 		file: command.file,
@@ -965,11 +1038,11 @@ async function runApi(command, io, fetchFn = fetch) {
 		const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
 		const { code, message, defined: _defined, ...details } = record(record(body)?.error) ?? record(body) ?? {};
 		throw new CliError(typeof code === "string" ? code : "API_FAILED", typeof message === "string" ? message : `API request failed (${response.status}).`, exitCodes.error, {
-			status: response.status,
-			...details
+			...details,
+			status: response.status
 		});
 	}
-	return body;
+	return raw ? rawText(body, raw, reads) : body;
 }
 //#endregion
 //#region src/apps.ts
@@ -1061,7 +1134,10 @@ const textDetails = `
 input, such as content=page.md or changes.0.content=page.md; - reads stdin.
 Nothing is trimmed or changed. The JSON must leave that field out; objects
 on the way are made, arrays must be in the JSON. --raw <field> prints one
-text field of the result exactly, without JSON quotes or an added newline.`;
+text field of the result exactly, without JSON quotes or an added newline.
+It refuses before sending when the output schema rules that field out. When
+a request succeeded but the field is not text, the error has "succeeded"
+and the full "result": do not send it again.`;
 const apiTopic = {
 	usage: "fulldev api <app>[.<operation>] [JSON | -] [--file <path>] [--org <slug>]",
 	summary: "List or call an operation of the app's OpenAPI API",
@@ -1645,8 +1721,6 @@ async function waitForForm(callTool, { branchId, formId, timeoutMs, app = "cms",
 /** A tool call can wait on the server for up to a minute. */
 const requestTimeoutMs = 12e4;
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
-/** A result as JSON, or with --raw one text field of it exactly as it is. */
-const output = (value, raw) => raw ? getText(value, raw) : json(value);
 /** A rejected or expired sign-in, from any layer, becomes SignInRequiredError. */
 function signInError(error, target) {
 	if (isSignInRequired(error)) return error;
@@ -1881,7 +1955,7 @@ async function run(command, io) {
 		case "status": return status(command.target, io);
 		case "api": {
 			const data = await runApi(command, io);
-			io.stdout(output(data, command.raw));
+			io.stdout(command.raw ? data : json(data));
 			return exitCodes.ok;
 		}
 		case "instructions": {
@@ -1922,15 +1996,25 @@ async function run(command, io) {
 			});
 			if (command.allOrganizations) return callInEvery(command, args, io);
 			if (command.organization !== void 0) args.organization = command.organization;
-			const result = await withClient(command.target, command.session, io, (client) => client.callTool({
-				name: command.tool,
-				arguments: args
-			}, { timeout: requestTimeoutMs }));
+			const { raw } = command;
+			const { result, readOnly } = await withClient(command.target, command.session, io, async (client) => {
+				const tool = raw ? (await listTools(client)).find(({ name }) => name === command.tool) : void 0;
+				const ruledOut = raw && ruledOutText(tool?.outputSchema, raw);
+				if (raw && ruledOut) throw new UsageError(`--raw ${fieldName(raw)} can never be text: the tool's output schema says ${ruledOut}. Nothing was sent.`, `fulldev tools ${command.tool}`);
+				return {
+					result: await client.callTool({
+						name: command.tool,
+						arguments: args
+					}, { timeout: requestTimeoutMs }),
+					readOnly: tool?.annotations?.readOnlyHint === true
+				};
+			});
 			if (result.isError) {
 				io.stderr(json(toolError(result)));
 				return exitCodes.error;
 			}
-			io.stdout(output(toolOutput(result), command.raw));
+			const value = toolOutput(result);
+			io.stdout(raw ? rawText(value, raw, readOnly) : json(value));
 			return exitCodes.ok;
 		}
 		case "form-wait": {

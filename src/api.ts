@@ -1,6 +1,12 @@
 import type { Command } from "./args.ts"
 import type { Io } from "./main.ts"
-import { CliError, SignInRequiredError, exitCodes } from "./errors.ts"
+import {
+  CliError,
+  SignInRequiredError,
+  UsageError,
+  exitCodes,
+} from "./errors.ts"
+import { fieldName, rawText, ruledOutText } from "./fields.ts"
 import { readToolArguments } from "./input.ts"
 import { StoredTokenAuth, browserLogin } from "./oauth.ts"
 
@@ -12,6 +18,7 @@ interface Operation {
   operationId?: string
   summary?: string
   parameters?: Array<Parameter>
+  responses?: Record<string, { content?: Record<string, { schema?: unknown }> }>
 }
 interface Specification {
   paths?: Record<string, Record<string, Operation>>
@@ -48,7 +55,8 @@ export async function runApi(
       "API_UNAVAILABLE",
       "This server does not expose the app's OpenAPI specification.",
     )
-  const operations = apiOperations((await specResponse.json()) as Specification)
+  const spec = (await specResponse.json()) as Specification
+  const operations = apiOperations(spec)
   if (!command.operation) return operations
   const operation = operations.find(
     (candidate) => candidate.operationId === command.operation,
@@ -58,6 +66,20 @@ export async function runApi(
       "NOT_FOUND",
       `Unknown API operation: ${command.operation}. Run fulldev api ${app.name}.`,
     )
+  const { raw } = command
+  if (raw) {
+    // Before anything is sent: does every success response rule out text?
+    const reasons = Object.entries(operation.responses ?? {})
+      .filter(([status]) => status.startsWith("2"))
+      .map(([, response]) =>
+        ruledOutText(response.content?.["application/json"]?.schema, raw, spec),
+      )
+    if (reasons.length > 0 && reasons.every((reason) => reason !== undefined))
+      throw new UsageError(
+        `--raw ${fieldName(raw)} can never be text: the API's response schema says ${reasons[0]}. Nothing was sent.`,
+        `fulldev api ${app.name}`,
+      )
+  }
   const input = await readToolArguments({
     json: command.json,
     file: command.file,
@@ -173,8 +195,8 @@ export async function runApi(
         ? message
         : `API request failed (${response.status}).`,
       exitCodes.error,
-      { status: response.status, ...details },
+      { ...details, status: response.status },
     )
   }
-  return body
+  return raw ? rawText(body, raw, reads) : body
 }

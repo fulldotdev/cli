@@ -19,8 +19,7 @@ import {
   exitCodes,
   isSignInRequired,
 } from "./errors.ts"
-import { getText } from "./fields.ts"
-import type { Field } from "./fields.ts"
+import { fieldName, rawText, ruledOutText } from "./fields.ts"
 import { waitForForm } from "./form-wait.ts"
 import { readToolArguments } from "./input.ts"
 import {
@@ -46,10 +45,6 @@ export interface Io {
 const requestTimeoutMs = 120_000
 
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`
-
-/** A result as JSON, or with --raw one text field of it exactly as it is. */
-const output = (value: unknown, raw: Field | undefined) =>
-  raw ? getText(value, raw) : json(value)
 
 /** A rejected or expired sign-in, from any layer, becomes SignInRequiredError. */
 function signInError(error: unknown, target: Target) {
@@ -350,8 +345,9 @@ async function run(command: Command, io: Io): Promise<number> {
     case "status":
       return status(command.target, io)
     case "api": {
+      // With --raw, runApi selects the text, since it knows whether it read.
       const data = await runApi(command, io)
-      io.stdout(output(data, command.raw))
+      io.stdout(command.raw ? (data as string) : json(data))
       return exitCodes.ok
     }
     case "instructions": {
@@ -413,21 +409,40 @@ async function run(command: Command, io: Io): Promise<number> {
       if (command.allOrganizations) return callInEvery(command, args, io)
       if (command.organization !== undefined)
         args.organization = command.organization
-      const result = await withClient(
+      const { raw } = command
+      const { result, readOnly } = await withClient(
         command.target,
         command.session,
         io,
-        (client) =>
-          client.callTool(
-            { name: command.tool, arguments: args },
-            { timeout: requestTimeoutMs },
-          ),
+        async (client) => {
+          // Only --raw lists the tools, to check its field against the
+          // tool's output schema before a call that may change data.
+          const tool = raw
+            ? (await listTools(client)).find(
+                ({ name }) => name === command.tool,
+              )
+            : undefined
+          const ruledOut = raw && ruledOutText(tool?.outputSchema, raw)
+          if (raw && ruledOut)
+            throw new UsageError(
+              `--raw ${fieldName(raw)} can never be text: the tool's output schema says ${ruledOut}. Nothing was sent.`,
+              `fulldev tools ${command.tool}`,
+            )
+          return {
+            result: await client.callTool(
+              { name: command.tool, arguments: args },
+              { timeout: requestTimeoutMs },
+            ),
+            readOnly: tool?.annotations?.readOnlyHint === true,
+          }
+        },
       )
       if (result.isError) {
         io.stderr(json(toolError(result)))
         return exitCodes.error
       }
-      io.stdout(output(toolOutput(result), command.raw))
+      const value = toolOutput(result)
+      io.stdout(raw ? rawText(value, raw, readOnly) : json(value))
       return exitCodes.ok
     }
     case "form-wait": {

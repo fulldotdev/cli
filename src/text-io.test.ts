@@ -11,12 +11,14 @@ import { main } from "./main.ts"
 import type * as OAuth from "./oauth.ts"
 
 const callTool = vi.hoisted(() => vi.fn())
+const listTools = vi.hoisted(() => vi.fn())
 const connect = vi.hoisted(() => vi.fn())
 vi.mock("@modelcontextprotocol/client", async (original) => ({
   ...(await original<typeof McpClient>()),
   Client: class {
     connect = connect
     callTool = callTool
+    listTools = listTools
     close = async () => {}
   },
   StreamableHTTPClientTransport: class {},
@@ -66,7 +68,28 @@ const structured = (data: Record<string, unknown>): CallToolResult => ({
 beforeEach(() => {
   connect.mockReset().mockResolvedValue(undefined)
   callTool.mockReset()
+  listTools.mockReset().mockResolvedValue({ tools: [] })
 })
+
+/** cms_commit_files as the server lists it: revision is a string, more may come. */
+const commitFiles = {
+  name: "cms_commit_files",
+  inputSchema: { type: "object" },
+  outputSchema: {
+    type: "object",
+    properties: {
+      revision: { type: "string" },
+      pullRequest: {
+        type: "object",
+        properties: { number: { type: "number" } },
+        additionalProperties: {},
+      },
+    },
+    required: ["revision"],
+    additionalProperties: {},
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true },
+}
 
 describe("call with --text-file and --raw", () => {
   it("sends the exact text with the JSON input, its version and organization", async () => {
@@ -95,6 +118,7 @@ describe("call with --text-file and --raw", () => {
     expect(stdout).toBe(
       `${JSON.stringify({ pageId: "p", version: 8 }, null, 2)}\n`,
     )
+    expect(listTools).not.toHaveBeenCalled()
   })
 
   it("prints a text field of the result exactly, from structured or text content", async () => {
@@ -118,28 +142,97 @@ describe("call with --text-file and --raw", () => {
   })
 
   it.each([
-    [{ version: 3 }, /it is missing/],
-    [{ markdown: 3 }, /it is a number/],
-    [{ markdown: null }, /it is null/],
+    [{ pageId: "new", version: 1 }, /markdown is missing/],
+    [{ markdown: 3 }, /markdown is a number/],
+    [{ markdown: null }, /markdown is null/],
   ])(
-    "prints nothing on stdout when the field is not text: %j",
+    "keeps the result of a call that succeeded when the field is not text: %j",
     async (data, message) => {
       callTool.mockResolvedValue(structured(data))
       const { code, stdout, stderr } = await run([
         "pages",
         "call",
-        "export_page_markdown",
+        "create_page",
         "--raw",
         "markdown",
       ])
       expect(code).toBe(1)
       expect(stdout).toBe("")
-      expect(JSON.parse(stderr).error).toMatchObject({
+      expect(JSON.parse(stderr).error).toEqual({
         code: "RAW_NOT_TEXT",
         message: expect.stringMatching(message),
+        succeeded: true,
+        result: data,
       })
+      expect(JSON.parse(stderr).error.message).toMatch(
+        /^The request succeeded and any change it made is kept.*do not send the request again\.$/,
+      )
+      expect(callTool).toHaveBeenCalledTimes(1)
     },
   )
+
+  it("says a read-only tool changed nothing when its field is not text", async () => {
+    listTools.mockResolvedValue({
+      tools: [
+        {
+          name: "pages_get_page",
+          inputSchema: { type: "object" },
+          annotations: { readOnlyHint: true },
+        },
+      ],
+    })
+    callTool.mockResolvedValue(structured({ pageId: "p" }))
+    const { stderr } = await run(["pages", "call", "get_page", "--raw", "x"])
+    expect(JSON.parse(stderr).error.message).toMatch(
+      /^The request succeeded, but --raw x needs text.*under "result"\.$/,
+    )
+  })
+
+  it("refuses a field the output schema rules out before calling the tool", async () => {
+    listTools.mockResolvedValue({ tools: [commitFiles] })
+    for (const field of ["revision.sha", "pullRequest.number"]) {
+      const { code, stdout, stderr } = await run([
+        "cms",
+        "call",
+        "commit_files",
+        '{"branchId":"b","expectedRevision":"old","changes":[{"path":"a.md","content":"x"}]}',
+        "--raw",
+        field,
+      ])
+      expect(code).toBe(64)
+      expect(stdout).toBe("")
+      expect(JSON.parse(stderr).error).toMatchObject({
+        code: "USAGE",
+        message: expect.stringMatching(
+          /can never be text.*Nothing was sent\.$/,
+        ),
+        help: "fulldev tools cms_commit_files",
+      })
+    }
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it("calls the tool when its output schema allows text at the field", async () => {
+    listTools.mockResolvedValue({ tools: [commitFiles] })
+    callTool.mockResolvedValue(structured({ revision: "abc123" }))
+    expect(
+      await run(["cms", "call", "commit_files", "--raw", "revision"]),
+    ).toEqual({ code: 0, stdout: "abc123", stderr: "" })
+    // Not declared, but the schema allows more properties: the call goes out.
+    const { code, stderr } = await run([
+      "cms",
+      "call",
+      "commit_files",
+      "--raw",
+      "markdown",
+    ])
+    expect(code).toBe(1)
+    expect(JSON.parse(stderr).error).toMatchObject({
+      succeeded: true,
+      result: { revision: "abc123" },
+    })
+    expect(callTool).toHaveBeenCalledTimes(2)
+  })
 
   it("prints a tool's error with its details and nothing on stdout", async () => {
     const error = {
@@ -196,6 +289,17 @@ describe("api with --text-file and --raw", () => {
         get: { operationId: "pages.exportMarkdown" },
       },
     },
+    components: {
+      schemas: {
+        Receipt: {
+          type: "object",
+          properties: {
+            pageId: { type: "string" },
+            version: { type: "integer" },
+          },
+        },
+      },
+    },
   }
   const fetchFn = vi.fn<typeof fetch>()
   beforeEach(() => {
@@ -205,12 +309,19 @@ describe("api with --text-file and --raw", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
-  const answer = (body: unknown, status = 200) =>
+  const answer = (body: unknown, status = 200, create?: unknown) =>
     fetchFn.mockImplementation(async (url) =>
       new Request(url).url.endsWith("openapi.json")
-        ? Response.json(spec)
+        ? Response.json({
+            ...spec,
+            paths: { ...spec.paths, "/pages/create": { post: create } },
+          })
         : Response.json(body, { status }),
     )
+  const creates = (schema: unknown) => ({
+    operationId: "pages.create",
+    responses: { "200": { content: { "application/json": { schema } } } },
+  })
 
   it("posts the exact text and prints a raw field", async () => {
     answer({ markdown, version: 4 })
@@ -262,6 +373,52 @@ describe("api with --text-file and --raw", () => {
         data: { currentVersion: 9 },
       },
     })
+  })
+
+  it("refuses a field the response schema rules out before sending", async () => {
+    answer(
+      { pageId: "p-new", version: 1 },
+      200,
+      creates({ $ref: "#/components/schemas/Receipt" }),
+    )
+    const { code, stdout, stderr } = await run([
+      "api",
+      "pages.pages.create",
+      "{}",
+      "--raw",
+      "version",
+    ])
+    expect(code).toBe(64)
+    expect(stdout).toBe("")
+    expect(JSON.parse(stderr).error.message).toBe(
+      "--raw version can never be text: the API's response schema says version is an integer. Nothing was sent.",
+    )
+    expect(fetchFn).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the receipt when a change succeeded under an open schema", async () => {
+    // How the server describes every response today: anything.
+    answer(
+      { pageId: "p-new", version: 1 },
+      200,
+      creates({ anyOf: [{}, { not: {} }] }),
+    )
+    const { code, stdout, stderr } = await run([
+      "api",
+      "pages.pages.create",
+      "{}",
+      "--raw",
+      "markdown",
+    ])
+    expect(code).toBe(1)
+    expect(stdout).toBe("")
+    expect(JSON.parse(stderr).error).toMatchObject({
+      code: "RAW_NOT_TEXT",
+      message: expect.stringMatching(/^The request succeeded and any change/),
+      succeeded: true,
+      result: { pageId: "p-new", version: 1 },
+    })
+    expect(fetchFn).toHaveBeenCalledTimes(2)
   })
 
   it("refuses a conflicting text before sending the change", async () => {

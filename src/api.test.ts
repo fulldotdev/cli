@@ -180,6 +180,28 @@ describe("HTTP API command", () => {
     })
     expect(fetchFn).toHaveBeenCalledTimes(2)
   })
+  it("reports the response's own HTTP status, whatever the body says", async () => {
+    const fetchFn = vi.fn<typeof fetch>(async (url) =>
+      new Request(url).url.endsWith("openapi.json")
+        ? Response.json(spec)
+        : Response.json(
+            {
+              defined: true,
+              code: "CONFLICT",
+              status: 200,
+              message: "The record changed.",
+              data: { currentVersion: 4 },
+            },
+            { status: 409 },
+          ),
+    )
+    await expect(
+      runApi(command(["api", "contacts.records.update", "{}"]), io, fetchFn),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      details: { status: 409, data: { currentVersion: 4 } },
+    })
+  })
   it("rejects unknown operations and paths outside the app before obtaining credentials", async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json(spec))
     await expect(
