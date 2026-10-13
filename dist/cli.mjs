@@ -973,7 +973,10 @@ async function runApi(command, io, fetchFn = fetch) {
 	if (!operation) throw new CliError("NOT_FOUND", `Unknown API operation: ${command.operation}. Run fulldev api ${app.name}.`);
 	const { raw } = command;
 	if (raw) {
-		const reasons = Object.entries(operation.responses ?? {}).filter(([status]) => status.startsWith("2")).map(([, response]) => ruledOutText(response.content?.["application/json"]?.schema, raw, spec));
+		const reasons = Object.entries(operation.responses ?? {}).filter(([status]) => status.startsWith("2") || status === "default").flatMap(([, response]) => {
+			const representations = Object.values(response.content ?? {});
+			return representations.length === 0 ? [void 0] : representations.map(({ schema }) => ruledOutText(schema, raw, spec));
+		});
 		if (reasons.length > 0 && reasons.every((reason) => reason !== void 0)) throw new UsageError(`--raw ${fieldName(raw)} can never be text: the API's response schema says ${reasons[0]}. Nothing was sent.`, `fulldev api ${app.name}`);
 	}
 	const input = await readToolArguments({

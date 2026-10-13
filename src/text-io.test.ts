@@ -309,14 +309,22 @@ describe("api with --text-file and --raw", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
-  const answer = (body: unknown, status = 200, create?: unknown) =>
+  const answer = (
+    body: unknown,
+    status = 200,
+    create?: unknown,
+    mediaType = "application/json",
+  ) =>
     fetchFn.mockImplementation(async (url) =>
       new Request(url).url.endsWith("openapi.json")
         ? Response.json({
             ...spec,
             paths: { ...spec.paths, "/pages/create": { post: create } },
           })
-        : Response.json(body, { status }),
+        : Response.json(body, {
+            status,
+            headers: { "content-type": mediaType },
+          }),
     )
   const creates = (schema: unknown) => ({
     operationId: "pages.create",
@@ -420,6 +428,50 @@ describe("api with --text-file and --raw", () => {
     })
     expect(fetchFn).toHaveBeenCalledTimes(2)
   })
+
+  it.each([
+    ["default success response", "default", "application/json", 201],
+    ["alternative representation", "200", "application/vnd.fulldev+json", 200],
+  ])(
+    "allows text declared by an %s",
+    async (_, status, mediaType, responseStatus) => {
+      const nontext = {
+        type: "object",
+        properties: { markdown: { type: "number" } },
+      }
+      const text = {
+        type: "object",
+        properties: { markdown: { type: "string" } },
+      }
+      const responses: Record<
+        string,
+        { content: Record<string, { schema: unknown }> }
+      > = {
+        "200": { content: { "application/json": { schema: nontext } } },
+      }
+      responses[status] ??= { content: {} }
+      responses[status]!.content[mediaType] = { schema: text }
+      answer(
+        { markdown },
+        responseStatus,
+        {
+          operationId: "pages.create",
+          responses,
+        },
+        mediaType,
+      )
+      const { code, stdout } = await run([
+        "api",
+        "pages.pages.create",
+        "{}",
+        "--raw",
+        "markdown",
+      ])
+      expect(code).toBe(0)
+      expect(stdout).toBe(markdown)
+      expect(fetchFn).toHaveBeenCalledTimes(2)
+    },
+  )
 
   it("refuses a conflicting text before sending the change", async () => {
     answer({})
