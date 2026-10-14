@@ -1,5 +1,7 @@
 # Fulldev CLI
 
+> **Moved.** The Fulldev CLI is now developed in Fulldev's own workspace and still released to npm as [`fulldev`](https://www.npmjs.com/package/fulldev): run `npx -y fulldev`. This repository is archived and no longer updated. Add the agent skill from the npm release: `npx skills add https://cdn.jsdelivr.net/npm/fulldev/skills/fulldev/SKILL.md`.
+
 Use Fulldev apps from a terminal or an AI agent. The CLI discovers the full HTTP API from OpenAPI and is a thin client of the Fulldev MCP server at `https://app.full.dev/mcp`, which has the tools of every app your organization gives you: it reads the tools, their schemas, and the instructions from the server each time, so it stays in step with the apps. Each app's tools start with its name, such as `cms_`.
 
 | App        | For                                                                                                                        |
