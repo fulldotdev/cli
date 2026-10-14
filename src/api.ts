@@ -1,6 +1,12 @@
 import type { Command } from "./args.ts"
 import type { Io } from "./main.ts"
-import { CliError, SignInRequiredError } from "./errors.ts"
+import {
+  CliError,
+  SignInRequiredError,
+  UsageError,
+  exitCodes,
+} from "./errors.ts"
+import { fieldName, rawText, ruledOutText } from "./fields.ts"
 import { readToolArguments } from "./input.ts"
 import { StoredTokenAuth, browserLogin } from "./oauth.ts"
 
@@ -12,6 +18,7 @@ interface Operation {
   operationId?: string
   summary?: string
   parameters?: Array<Parameter>
+  responses?: Record<string, { content?: Record<string, { schema?: unknown }> }>
 }
 interface Specification {
   paths?: Record<string, Record<string, Operation>>
@@ -48,7 +55,8 @@ export async function runApi(
       "API_UNAVAILABLE",
       "This server does not expose the app's OpenAPI specification.",
     )
-  const operations = apiOperations((await specResponse.json()) as Specification)
+  const spec = (await specResponse.json()) as Specification
+  const operations = apiOperations(spec)
   if (!command.operation) return operations
   const operation = operations.find(
     (candidate) => candidate.operationId === command.operation,
@@ -58,9 +66,27 @@ export async function runApi(
       "NOT_FOUND",
       `Unknown API operation: ${command.operation}. Run fulldev api ${app.name}.`,
     )
+  const { raw } = command
+  if (raw) {
+    // Before anything is sent: does every success response rule out text?
+    const reasons = Object.entries(operation.responses ?? {})
+      .filter(([status]) => status.startsWith("2") || status === "default")
+      .flatMap(([, response]) => {
+        const representations = Object.values(response.content ?? {})
+        return representations.length === 0
+          ? [undefined]
+          : representations.map(({ schema }) => ruledOutText(schema, raw, spec))
+      })
+    if (reasons.length > 0 && reasons.every((reason) => reason !== undefined))
+      throw new UsageError(
+        `--raw ${fieldName(raw)} can never be text: the API's response schema says ${reasons[0]}. Nothing was sent.`,
+        `fulldev api ${app.name}`,
+      )
+  }
   const input = await readToolArguments({
     json: command.json,
     file: command.file,
+    textFiles: command.textFiles,
   })
   const payload = { ...input }
   const path = operation.path.replace(/\{([^{}]+)\}/g, (_, name: string) => {
@@ -154,16 +180,26 @@ export async function runApi(
           )
         })
   if (!response.ok) {
-    const failure = body as {
-      code?: string
-      message?: string
-      error?: { code?: string; message?: string }
-    } | null
-    const error = failure?.error ?? failure ?? {}
+    // {"error":{...}} from the server, or an oRPC error with its data, such as
+    // a conflict's current version: everything but code and message stays.
+    const record = (value: unknown) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined
+    const {
+      code,
+      message,
+      defined: _defined,
+      ...details
+    } = record(record(body)?.error) ?? record(body) ?? {}
     throw new CliError(
-      error.code ?? "API_FAILED",
-      error.message ?? `API request failed (${response.status}).`,
+      typeof code === "string" ? code : "API_FAILED",
+      typeof message === "string"
+        ? message
+        : `API request failed (${response.status}).`,
+      exitCodes.error,
+      { ...details, status: response.status },
     )
   }
-  return body
+  return raw ? rawText(body, raw, reads) : body
 }

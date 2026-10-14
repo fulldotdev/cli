@@ -11,6 +11,7 @@ Use Fulldev apps from a terminal or an AI agent. The CLI discovers the full HTTP
 | `pages`    | Reports and plans as web pages with [Fulldev Pages](https://pages.full.dev), for administrators only                       |
 | `contacts` | [Daily synchronization of your Google contacts across multiple accounts with Import and Export](https://contacts.full.dev) |
 | `send`     | [Customer message scenarios and deliveries](https://send.full.dev)                                                         |
+| `meet`     | Your meetings, transcripts and screenshots for follow-up with [Fulldev Meet](https://meet.full.dev)                        |
 | `work`     | Tasks, projects and goals in your organization                                                                             |
 
 ## Install
@@ -89,6 +90,30 @@ On the server the organization is the tool's `organization` argument, which ever
 
 `call` prints the tool's result as JSON on stdout. When the tool fails, it prints the error on stderr and exits with 1.
 
+## Exact text
+
+For Markdown and other text, `--text-file <field>=<path>` puts a file's exact UTF-8 content in one field of the input, and `--raw <field>` prints one text field of the result as it is, without JSON quotes or an added newline. Both work with `call` and `api`. Nothing is trimmed, and line endings stay as they are.
+
+```sh
+fulldev cms call commit_files '{"branchId":"<id>","expectedRevision":"<sha>","changes":[{"path":"src/content/home.md"}]}' \
+  --text-file changes.0.content=home.md
+fulldev cms call read_file '{"branchId":"<id>","path":"src/content/home.md"}' --raw content > home.md
+fulldev pages call export_page_markdown '{"pageId":"<id>"}' --raw markdown > page.md
+```
+
+To change a task's notes only when nobody else did, read them first and send back the `notesVersion` from that same result as `expectedNotesVersion`. This short token also works for large notes; without a guard, the update works as before:
+
+```sh
+fulldev work call get_task '{"taskId":"<id>"}'
+fulldev work call update_task '{"taskId":"<id>","expectedNotesVersion":"<notesVersion>"}' --text-file notes=notes.md
+```
+
+- A field is a dotted path, such as `content.blocks.0.markdown`. Objects on the way are made; arrays must be in the JSON, with the item.
+- The JSON leaves that field out, and each field is named once. `-` reads stdin, for one input only.
+- Names such as `__proto__` and `constructor`, an existing field, a missing array item, and text that is not UTF-8 are usage errors (exit 64), before anything is sent.
+- When the tool's output schema or the API's response schema shows the field can never be text, `--raw` refuses before sending (exit 64). It does not work with `--all-orgs`.
+- When the request succeeded but its field is missing or not text, `--raw` prints nothing on stdout and exits with 1. The error has `"succeeded": true` and the full `result`, such as a new page's id: use it, and do not send the request again.
+
 `fulldev cms form wait` keeps calling `cms_wait_for_form` until the person sends the form, with a progress line on stderr each round, then prints the result. After `--timeout` minutes (default 30) it stops, also in the middle of a request, prints the form id, and exits with 2, so you can run it again.
 
 ## Output and exit codes
@@ -152,4 +177,4 @@ fulldev api contacts.accounts.list '{}' --org my-company
 fulldev contacts api accounts.list --file input.json --org my-company
 ```
 
-Use an operation id from `fulldev api <app>`. Input is a JSON object, a file with `--file`, or stdin with `-`. Reads send query parameters; changes send JSON. Existing OAuth credentials and organization grants cover both interfaces. The CLI refuses redirects and paths outside the selected app before sending credentials. Servers without OpenAPI continue to support the existing MCP commands.
+Use an operation id from `fulldev api <app>`. Input is a JSON object, a file with `--file`, or stdin with `-`, with `--text-file` and `--raw` as for `call`. Reads send query parameters; changes send JSON. An error keeps the server's details, such as `status` and a conflict's `data`. Existing OAuth credentials and organization grants cover both interfaces. The CLI refuses redirects and paths outside the selected app before sending credentials. Servers without OpenAPI continue to support the existing MCP commands.

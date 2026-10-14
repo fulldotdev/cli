@@ -4,7 +4,7 @@ import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client, OAuthError, OAuthErrorCode, ProtocolError, SdkError, StreamableHTTPClientTransport, UnauthorizedError, auth, checkResourceAllowed, discoverAuthorizationServerMetadata, discoverOAuthServerInfo, refreshAuthorization, resourceUrlFromServerUrl } from "@modelcontextprotocol/client";
-import { text } from "node:stream/consumers";
+import { buffer } from "node:stream/consumers";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -313,9 +313,178 @@ var CredentialStore = class {
 //#region package.json
 var version = "0.6.1";
 //#endregion
+//#region src/fields.ts
+/** Names that would reach an object's prototype instead of its own data. */
+const unsafe = /* @__PURE__ */ new Set([
+	"__proto__",
+	"prototype",
+	"constructor"
+]);
+const index = /^(?:0|[1-9]\d*)$/;
+const fieldName = (field) => field.join(".");
+function parseField(text, flag) {
+	const field = text.split(".");
+	if (field.some((segment) => segment === "")) throw new UsageError(`${flag} needs a field such as content or changes.0.content, not "${text}".`);
+	const bad = field.find((segment) => unsafe.has(segment));
+	if (bad) throw new UsageError(`${flag} cannot use the field name ${bad}.`);
+	return field;
+}
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+/**
+* Sets `text` at `field` of the tool input. Objects on the way are created
+* when missing; arrays must already be there. A field the input already has
+* is a conflict: the person names each field once.
+*/
+function setText(input, field, text) {
+	const name = fieldName(field);
+	const fail = (reason) => {
+		throw new UsageError(`Cannot set --text-file ${name}: ${reason}`);
+	};
+	let container = input;
+	for (const [position, segment] of field.entries()) {
+		const last = position === field.length - 1;
+		const at = fieldName(field.slice(0, position + 1));
+		if (Array.isArray(container)) {
+			if (last) fail(`${at} is an array element; set a field inside it.`);
+			if (!index.test(segment) || Number(segment) >= container.length) fail(`${fieldName(field.slice(0, position))} has no item ${segment}.`);
+			container = container[Number(segment)];
+			continue;
+		}
+		if (!isRecord(container)) return fail(`${fieldName(field.slice(0, position))} is not an object.`);
+		if (last) {
+			if (Object.hasOwn(container, segment)) fail(`the input already has ${at}. Leave it out of the JSON.`);
+			container[segment] = text;
+			return;
+		}
+		if (!Object.hasOwn(container, segment)) {
+			if (index.test(field[position + 1])) fail(`${at} is missing; give the array in the JSON input.`);
+			container[segment] = {};
+		}
+		container = container[segment];
+	}
+}
+/**
+* --raw: the text at `field` of a successful request's result. When it is
+* not text, the error says the request succeeded and keeps its result, such
+* as a new page's id, so nobody sends a change twice.
+*/
+function rawText(result, field, readOnly) {
+	let current = result;
+	for (const segment of field) {
+		current = Array.isArray(current) && index.test(segment) ? current[Number(segment)] : isRecord(current) && Object.hasOwn(current, segment) ? current[segment] : void 0;
+		if (current === void 0) break;
+	}
+	if (typeof current === "string") return current;
+	const kind = current === void 0 ? "missing" : current === null ? "null" : Array.isArray(current) ? "an array" : typeof current === "object" ? "an object" : `a ${typeof current}`;
+	const name = fieldName(field);
+	throw new CliError("RAW_NOT_TEXT", `The request succeeded${readOnly ? "" : " and any change it made is kept"}, but --raw ${name} needs text, and the result's ${name} is ${kind}. The full result is under "result"${readOnly ? "." : "; do not send the request again."}`, exitCodes.error, {
+		succeeded: true,
+		result
+	});
+}
+const article = (type) => type === "null" ? "null" : /^[aeiou]/.test(type) ? `an ${type}` : `a ${type}`;
+/** A local reference such as #/$defs/page or #/components/schemas/Page. */
+function resolve(root, ref) {
+	if (ref !== "#" && !ref.startsWith("#/")) return void 0;
+	let node = root;
+	for (const part of ref === "#" ? [] : ref.slice(2).split("/")) {
+		const key = part.replaceAll("~1", "/").replaceAll("~0", "~");
+		if (!isRecord(node) && !Array.isArray(node) || !Object.hasOwn(node, key)) return void 0;
+		node = node[key];
+	}
+	return node;
+}
+/**
+* Why a declared output schema rules out text at `field`, or undefined when
+* it may be text. It trusts only what the schema proves: types, properties
+* closed with additionalProperties false, array items, local $refs, and
+* unions whose every branch rules it out. An open object, a pattern or an
+* unknown keyword may hold text.
+*/
+function ruledOutText(schema, field, root = schema) {
+	let budget = 200;
+	const visit = (node, position) => {
+		if (--budget < 0 || !isRecord(node)) return void 0;
+		if (typeof node.$ref === "string") return visit(resolve(root, node.$ref), position);
+		if (Array.isArray(node.allOf)) {
+			const ruled = node.allOf.map((branch) => visit(branch, position)).find((reason) => reason !== void 0);
+			if (ruled) return ruled;
+		}
+		for (const branches of [node.anyOf, node.oneOf]) {
+			if (!Array.isArray(branches) || branches.length === 0) continue;
+			const reasons = branches.map((branch) => visit(branch, position));
+			if (reasons.every((reason) => reason !== void 0)) return reasons[0];
+		}
+		const types = typeof node.type === "string" ? [node.type] : Array.isArray(node.type) ? node.type.filter((type) => typeof type === "string") : void 0;
+		const at = fieldName(field.slice(0, position)) || "the result";
+		const is = () => `${at} is ${types.map(article).join(" or ")}`;
+		const segment = field[position];
+		if (segment === void 0) return types && !types.includes("string") ? is() : void 0;
+		const reasons = [];
+		if (!types || types.includes("object")) {
+			const properties = isRecord(node.properties) ? node.properties : {};
+			const composed = [
+				"allOf",
+				"anyOf",
+				"oneOf",
+				"patternProperties"
+			].some((key) => node[key] !== void 0);
+			reasons.push(Object.hasOwn(properties, segment) ? visit(properties[segment], position + 1) : composed ? void 0 : node.additionalProperties === false ? `${at} has no ${segment}` : visit(node.additionalProperties, position + 1));
+		}
+		if (index.test(segment) && (!types || types.includes("array"))) {
+			const item = Number(segment);
+			const prefix = Array.isArray(node.prefixItems) ? node.prefixItems : [];
+			reasons.push(item < prefix.length ? visit(prefix[item], position + 1) : node.items === false ? `${at} has no item ${segment}` : visit(node.items, position + 1));
+		}
+		if (reasons.length === 0) return `${is()}, so it has no ${segment}`;
+		return reasons.every((reason) => reason !== void 0) ? reasons[0] : void 0;
+	};
+	return visit(schema, 0);
+}
+//#endregion
 //#region src/input.ts
-/** Reads a tool's arguments: a JSON object from the argument, a file or stdin. */
-async function readToolArguments({ json, file, readStdin = () => text(process.stdin) }) {
+/** Strict UTF-8 that keeps a byte order mark, so the text stays exactly as written. */
+const exact = new TextDecoder("utf-8", {
+	fatal: true,
+	ignoreBOM: true
+});
+/** Parses the --text-file flags; each field once, and stdin for one input only. */
+function parseTextFiles(specs, json) {
+	const textFiles = specs.map((spec) => {
+		const split = spec.indexOf("=");
+		if (split <= 0 || split === spec.length - 1) throw new UsageError(`--text-file needs <field>=<path>, such as content=page.md, not "${spec}".`);
+		return {
+			field: parseField(spec.slice(0, split), "--text-file"),
+			path: spec.slice(split + 1)
+		};
+	});
+	for (const [position, { field }] of textFiles.entries()) for (const other of textFiles.slice(position + 1)) {
+		const [short, long] = field.length <= other.field.length ? [field, other.field] : [other.field, field];
+		if (short.every((segment, at) => segment === long[at])) throw new UsageError(short.length === long.length ? `--text-file names ${fieldName(short)} twice.` : `--text-file sets ${fieldName(short)} and ${fieldName(long)}, which is inside it.`);
+	}
+	if (textFiles.filter(({ path }) => path === "-").length + (json === "-" ? 1 : 0) > 1) throw new UsageError("Only one input can come from stdin: the JSON with - or one --text-file.");
+	return textFiles;
+}
+/** A text file's exact content; no trimming and no newline changes. */
+async function readText(path, readStdin) {
+	let bytes;
+	if (path === "-") bytes = await readStdin();
+	else try {
+		bytes = await readFile(path);
+	} catch (error) {
+		throw new UsageError(`Cannot read ${path}: ${error.code ?? error.message}`);
+	}
+	try {
+		return exact.decode(bytes);
+	} catch {
+		throw new UsageError(`${path === "-" ? "stdin" : path} is not valid UTF-8 text.`);
+	}
+}
+/**
+* Reads a tool's arguments: a JSON object from the argument, a file or stdin,
+* with the exact text of each --text-file in its field.
+*/
+async function readToolArguments({ json, file, textFiles = [], readStdin = () => buffer(process.stdin) }) {
 	if (json !== void 0 && file !== void 0) throw new UsageError("Give the JSON as an argument or with --file, not both.");
 	let source = "{}";
 	let from = "the argument";
@@ -328,7 +497,7 @@ async function readToolArguments({ json, file, readStdin = () => text(process.st
 		}
 	} else if (json === "-") {
 		from = "stdin";
-		source = await readStdin();
+		source = new TextDecoder().decode(await readStdin());
 	} else if (json !== void 0) source = json;
 	if (!source.trim()) source = "{}";
 	let value;
@@ -338,7 +507,9 @@ async function readToolArguments({ json, file, readStdin = () => text(process.st
 		throw new UsageError(`The tool input from ${from} is not valid JSON: ${error.message}`);
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new UsageError(`The tool input from ${from} must be a JSON object.`);
-	return value;
+	const input = value;
+	for (const { field, path } of textFiles) setText(input, field, await readText(path, readStdin));
+	return input;
 }
 //#endregion
 //#region src/oauth.ts
@@ -660,7 +831,7 @@ async function readJson(response) {
 		return {};
 	}
 }
-const text$1 = (value) => typeof value === "string" ? value : void 0;
+const text = (value) => typeof value === "string" ? value : void 0;
 /**
 * Refreshes the target's tokens. Call it while holding the store's lock.
 * A refresh token the server no longer accepts is dropped, and the command
@@ -724,7 +895,7 @@ async function revokeTokens(target, credentials, fetchFn = fetch) {
 			});
 			if (!response.ok) {
 				const answer = await readJson(response);
-				failures.push(`${hint}: ${[text$1(answer.error) ?? `HTTP ${response.status}`, text$1(answer.error_description)].filter(Boolean).join(": ")}`);
+				failures.push(`${hint}: ${[text(answer.error) ?? `HTTP ${response.status}`, text(answer.error_description)].filter(Boolean).join(": ")}`);
 			}
 		}
 		return failures.length ? {
@@ -796,13 +967,23 @@ async function runApi(command, io, fetchFn = fetch) {
 		signal: AbortSignal.timeout(3e4)
 	});
 	if (!specResponse.ok) throw new CliError("API_UNAVAILABLE", "This server does not expose the app's OpenAPI specification.");
-	const operations = apiOperations(await specResponse.json());
+	const spec = await specResponse.json();
+	const operations = apiOperations(spec);
 	if (!command.operation) return operations;
 	const operation = operations.find((candidate) => candidate.operationId === command.operation);
 	if (!operation) throw new CliError("NOT_FOUND", `Unknown API operation: ${command.operation}. Run fulldev api ${app.name}.`);
+	const { raw } = command;
+	if (raw) {
+		const reasons = Object.entries(operation.responses ?? {}).filter(([status]) => status.startsWith("2") || status === "default").flatMap(([, response]) => {
+			const representations = Object.values(response.content ?? {});
+			return representations.length === 0 ? [void 0] : representations.map(({ schema }) => ruledOutText(schema, raw, spec));
+		});
+		if (reasons.length > 0 && reasons.every((reason) => reason !== void 0)) throw new UsageError(`--raw ${fieldName(raw)} can never be text: the API's response schema says ${reasons[0]}. Nothing was sent.`, `fulldev api ${app.name}`);
+	}
 	const input = await readToolArguments({
 		json: command.json,
-		file: command.file
+		file: command.file,
+		textFiles: command.textFiles
 	});
 	const payload = { ...input };
 	const path = operation.path.replace(/\{([^{}]+)\}/g, (_, name) => {
@@ -858,11 +1039,14 @@ async function runApi(command, io, fetchFn = fetch) {
 		throw new CliError("API_FAILED", `API returned a non-JSON response (${response.status}).`);
 	});
 	if (!response.ok) {
-		const failure = body;
-		const error = failure?.error ?? failure ?? {};
-		throw new CliError(error.code ?? "API_FAILED", error.message ?? `API request failed (${response.status}).`);
+		const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+		const { code, message, defined: _defined, ...details } = record(record(body)?.error) ?? record(body) ?? {};
+		throw new CliError(typeof code === "string" ? code : "API_FAILED", typeof message === "string" ? message : `API request failed (${response.status}).`, exitCodes.error, {
+			...details,
+			status: response.status
+		});
 	}
-	return body;
+	return raw ? rawText(body, raw, reads) : body;
 }
 //#endregion
 //#region src/apps.ts
@@ -911,6 +1095,11 @@ const apps = [
 		description: "Manage customer message scenarios and their deliveries."
 	},
 	{
+		name: "meet",
+		title: "Fulldev Meet",
+		description: "Read your meetings, transcripts, recording coverage and screenshots for follow-up."
+	},
+	{
 		name: "work",
 		title: "Fulldev Work",
 		description: "Plan tasks, projects and goals in your organization."
@@ -944,17 +1133,31 @@ function resolveTarget(flagUrl, env) {
 }
 //#endregion
 //#region src/args.ts
+const textDetails = `
+--text-file <field>=<path> puts a file's exact text in one field of the
+input, such as content=page.md or changes.0.content=page.md; - reads stdin.
+Nothing is trimmed or changed. The JSON must leave that field out; objects
+on the way are made, arrays must be in the JSON. --raw <field> prints one
+text field of the result exactly, without JSON quotes or an added newline.
+It refuses before sending when the output schema rules that field out. When
+a request succeeded but the field is not text, the error has "succeeded"
+and the full "result": do not send it again.`;
 const apiTopic = {
 	usage: "fulldev api <app>[.<operation>] [JSON | -] [--file <path>] [--org <slug>]",
 	summary: "List or call an operation of the app's OpenAPI API",
 	options: [
 		"url",
 		"file",
+		"text-file",
+		"raw",
 		"org",
 		"login",
 		"browser"
 	],
-	details: "Without an operation, lists the API operations and their schemas. Calls use the same login and organization grants as MCP. Data is JSON on stdout; errors go to stderr."
+	details: `Without an operation, lists the API operations and their schemas. Calls
+use the same login and organization grants as MCP. Data is JSON on stdout;
+errors go to stderr.
+${textDetails}`
 };
 const organizationDetails = `
 When the sign-in is for more than one organization, --org names the one to
@@ -1023,6 +1226,8 @@ annotations. Each app's tools start with its name, such as cms_.`
 		summary: "Call a tool with a JSON object",
 		options: [
 			"file",
+			"text-file",
+			"raw",
 			"org",
 			"all-orgs",
 			"url",
@@ -1032,6 +1237,7 @@ annotations. Each app's tools start with its name, such as cms_.`
 		details: `The tool's input is a JSON object: the argument, a file with --file, or
 stdin with -. Without input it sends {}. Prints the tool's result as JSON on
 stdout. When the tool fails, prints its error on stderr and exits with 1.
+${textDetails}
 ${organizationDetails}`
 	},
 	help: {
@@ -1073,6 +1279,8 @@ description, input schema, output schema and annotations.`
 		summary: "Call one of the app's tools with a JSON object",
 		options: [
 			"file",
+			"text-file",
+			"raw",
 			"org",
 			"all-orgs",
 			"url",
@@ -1084,6 +1292,7 @@ list_repositories calls cms_list_repositories. Its input is a JSON object:
 the argument, a file with --file, or stdin with -. Without input it sends
 {}. Prints the tool's result as JSON on stdout. When the tool fails, prints
 its error on stderr and exits with 1.
+${textDetails}
 ${organizationDetails}`
 	}
 };
@@ -1104,6 +1313,9 @@ line on stderr each round, then prints the result. After --timeout minutes
 const optionHelp = {
 	url: "--url <mcp url>      Use another server, such as a deploy preview's",
 	file: "-f, --file <path>    Read the tool's JSON input from a file",
+	"text-file": `--text-file <field>=<path>
+                       Put a file's exact text in a field; - reads stdin`,
+	raw: "--raw <field>        Print a text field of the result as it is",
 	timeout: "--timeout <minutes>  How long to wait (default 30)",
 	login: "--no-login           Fail with exit code 3 instead of signing in",
 	browser: "--no-browser         Print the sign-in link, for a browser here or elsewhere",
@@ -1219,6 +1431,18 @@ function closestTopic(words) {
 	return "";
 }
 const helpFor = (topic) => topic ? `fulldev ${topic} --help` : "fulldev --help";
+/** --text-file and --raw, with errors that point to the command's help. */
+function textOptions(values, json, topic) {
+	try {
+		return {
+			textFiles: parseTextFiles(values["text-file"] ?? [], json),
+			raw: values.raw === void 0 ? void 0 : parseField(values.raw, "--raw")
+		};
+	} catch (error) {
+		if (error instanceof UsageError) throw new UsageError(error.message, helpFor(topic));
+		throw error;
+	}
+}
 function parseCommandLine(argv, env = process.env) {
 	let parsed;
 	try {
@@ -1233,6 +1457,11 @@ function parseCommandLine(argv, env = process.env) {
 					type: "string",
 					short: "f"
 				},
+				"text-file": {
+					type: "string",
+					multiple: true
+				},
+				raw: { type: "string" },
 				org: { type: "string" },
 				"all-orgs": { type: "boolean" },
 				timeout: { type: "string" },
@@ -1305,7 +1534,7 @@ function parseCommandLine(argv, env = process.env) {
 		const words = first === "api" ? rest : rest.slice(1);
 		const operation = first === "api" ? words[0]?.split(".").slice(1).join(".") : words[0];
 		if (words.length > 2) throw new UsageError(`Usage: ${apiTopic.usage}`);
-		if (!operation && (words[1] || values.file)) throw new UsageError("Choose an API operation before giving arguments.");
+		if (!operation && (words[1] || values.file || values["text-file"] || values.raw)) throw new UsageError("Choose an API operation before giving arguments.");
 		return {
 			kind: "api",
 			target,
@@ -1314,6 +1543,7 @@ function parseCommandLine(argv, env = process.env) {
 			operation: operation || void 0,
 			json: words[1],
 			file: values.file,
+			...textOptions(values, words[1], "api"),
 			organization: values.org
 		};
 	}
@@ -1356,6 +1586,7 @@ function parseCommandLine(argv, env = process.env) {
 		case "call":
 			usage(args.length === 1 || args.length === 2);
 			if (values.org !== void 0 && values["all-orgs"]) throw new UsageError("Use --org or --all-orgs, not both.", helpFor(topic));
+			if (values.raw !== void 0 && values["all-orgs"]) throw new UsageError("--raw prints one result; use it with --org, not --all-orgs.", helpFor(topic));
 			return {
 				kind: "call",
 				target,
@@ -1363,6 +1594,7 @@ function parseCommandLine(argv, env = process.env) {
 				tool: app ? toolName(app, args[0]) : args[0],
 				json: args[1],
 				file: values.file,
+				...textOptions(values, args[1], topic),
 				organization: values.org,
 				allOrganizations: values["all-orgs"]
 			};
@@ -1727,7 +1959,7 @@ async function run(command, io) {
 		case "status": return status(command.target, io);
 		case "api": {
 			const data = await runApi(command, io);
-			io.stdout(json(data));
+			io.stdout(command.raw ? data : json(data));
 			return exitCodes.ok;
 		}
 		case "instructions": {
@@ -1763,19 +1995,30 @@ async function run(command, io) {
 		case "call": {
 			const args = await readToolArguments({
 				json: command.json,
-				file: command.file
+				file: command.file,
+				textFiles: command.textFiles
 			});
 			if (command.allOrganizations) return callInEvery(command, args, io);
 			if (command.organization !== void 0) args.organization = command.organization;
-			const result = await withClient(command.target, command.session, io, (client) => client.callTool({
-				name: command.tool,
-				arguments: args
-			}, { timeout: requestTimeoutMs }));
+			const { raw } = command;
+			const { result, readOnly } = await withClient(command.target, command.session, io, async (client) => {
+				const tool = raw ? (await listTools(client)).find(({ name }) => name === command.tool) : void 0;
+				const ruledOut = raw && ruledOutText(tool?.outputSchema, raw);
+				if (raw && ruledOut) throw new UsageError(`--raw ${fieldName(raw)} can never be text: the tool's output schema says ${ruledOut}. Nothing was sent.`, `fulldev tools ${command.tool}`);
+				return {
+					result: await client.callTool({
+						name: command.tool,
+						arguments: args
+					}, { timeout: requestTimeoutMs }),
+					readOnly: tool?.annotations?.readOnlyHint === true
+				};
+			});
 			if (result.isError) {
 				io.stderr(json(toolError(result)));
 				return exitCodes.error;
 			}
-			io.stdout(json(toolOutput(result)));
+			const value = toolOutput(result);
+			io.stdout(raw ? rawText(value, raw, readOnly) : json(value));
 			return exitCodes.ok;
 		}
 		case "form-wait": {
