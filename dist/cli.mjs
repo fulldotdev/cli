@@ -311,7 +311,7 @@ var CredentialStore = class {
 };
 //#endregion
 //#region package.json
-var version = "0.6.1";
+var version = "0.7.0";
 //#endregion
 //#region src/fields.ts
 /** Names that would reach an object's prototype instead of its own data. */

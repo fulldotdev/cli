@@ -1,5 +1,11 @@
 # fulldev
 
+## 0.7.0
+
+### Minor Changes
+
+- [#18](https://github.com/fulldotdev/cli/pull/18) [`489d163`](https://github.com/fulldotdev/cli/commit/489d1639c2aace3f2a2cde4216ad904507cc9f4b) Thanks [@silveltman](https://github.com/silveltman)! - Send and read exact text. `--text-file <field>=<path>` puts a file's exact UTF-8 content, or stdin with `-`, in one field of a `call` or `api` input, such as `changes.0.content`; `--raw <field>` prints one text field of the result without JSON quotes or an added newline. Conflicting, unsafe or ambiguous fields, and a `--raw` field the declared output schema rules out, are refused before anything is sent; when a request succeeded but its field is not text, the error says so and keeps the full result. `fulldev api` errors keep the server's details, such as `status` and a conflict's `data`. Add Fulldev Meet as the app `meet`.
+
 ## 0.6.1
 
 ### Patch Changes
